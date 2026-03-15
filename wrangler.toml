@@ -1,0 +1,37 @@
+name = "webwaka-professional-api"
+main = "src/modules/legal-practice/api/index.ts"
+compatibility_date = "2024-03-14"
+
+# Staging Environment
+[env.staging]
+name = "webwaka-professional-api-staging"
+workers_dev = true
+kv_namespaces = [
+  { binding = "TENANT_CONFIG", id = "REPLACE_WITH_STAGING_KV_ID" },
+  { binding = "EVENTS", id = "REPLACE_WITH_STAGING_EVENTS_KV_ID" }
+]
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "webwaka-professional-db-staging"
+database_id = "REPLACE_WITH_STAGING_D1_ID"
+
+[[env.staging.r2_buckets]]
+binding = "DOCUMENTS"
+bucket_name = "webwaka-professional-docs-staging"
+
+# Production Environment
+[env.production]
+name = "webwaka-professional-api-prod"
+workers_dev = true
+kv_namespaces = [
+  { binding = "TENANT_CONFIG", id = "REPLACE_WITH_PROD_KV_ID" },
+  { binding = "EVENTS", id = "REPLACE_WITH_PROD_EVENTS_KV_ID" }
+]
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "webwaka-professional-db-prod"
+database_id = "REPLACE_WITH_PROD_D1_ID"
+
+[[env.production.r2_buckets]]
+binding = "DOCUMENTS"
+bucket_name = "webwaka-professional-docs-prod"
