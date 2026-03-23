@@ -7,13 +7,13 @@ compatibility_date = "2024-03-14"
 name = "webwaka-professional-api-staging"
 workers_dev = true
 kv_namespaces = [
-  { binding = "TENANT_CONFIG", id = "REPLACE_WITH_STAGING_KV_ID" },
-  { binding = "EVENTS", id = "REPLACE_WITH_STAGING_EVENTS_KV_ID" }
+  { binding = "TENANT_CONFIG", id = "d870d125-0530-406d-8786-d04e07c5d0f5" },
+  { binding = "EVENTS", id = "d870d125-0530-406d-8786-d04e07c5d0f5" }
 ]
 [[env.staging.d1_databases]]
 binding = "DB"
 database_name = "webwaka-professional-db-staging"
-database_id = "REPLACE_WITH_STAGING_D1_ID"
+database_id = "66c38966-6906-46df-b106-be19b54c4c13"
 
 [[env.staging.r2_buckets]]
 binding = "DOCUMENTS"
@@ -24,13 +24,13 @@ bucket_name = "webwaka-professional-docs-staging"
 name = "webwaka-professional-api-prod"
 workers_dev = true
 kv_namespaces = [
-  { binding = "TENANT_CONFIG", id = "REPLACE_WITH_PROD_KV_ID" },
-  { binding = "EVENTS", id = "REPLACE_WITH_PROD_EVENTS_KV_ID" }
+  { binding = "TENANT_CONFIG", id = "d1d3b537-d0d5-40ea-8523-9d4727a00bc1" },
+  { binding = "EVENTS", id = "d1d3b537-d0d5-40ea-8523-9d4727a00bc1" }
 ]
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "webwaka-professional-db-prod"
-database_id = "REPLACE_WITH_PROD_D1_ID"
+database_id = "acfdfc4d-e63a-4482-977a-82376b68f578"
 
 [[env.production.r2_buckets]]
 binding = "DOCUMENTS"
