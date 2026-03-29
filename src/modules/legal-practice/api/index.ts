@@ -72,6 +72,8 @@ export interface Env {
   TENANT_CONFIG: KVNamespace;
   EVENTS: KVNamespace;
   JWT_SECRET: string;
+  ENVIRONMENT?: string;
+  RATE_LIMIT_KV?: KVNamespace;
   EVENT_BUS_URL?: string;
   EVENT_BUS_API_KEY?: string;
 }
@@ -149,6 +151,51 @@ async function validateJWT(token: string, secret: string): Promise<JWTPayload | 
 const app = new Hono<{ Bindings: Env }>();
 
 const logger = createLogger('legal-practice-api');
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CORS — Environment-aware (never wildcard in staging/production)
+// Security hardened 2026-03-29
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ALLOWED_ORIGINS: Record<string, string[]> = {
+  production: [
+    'https://professional.webwaka.app',
+    'https://legal.webwaka.app',
+    'https://admin.webwaka.app',
+  ],
+  staging: [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'https://professional-staging.webwaka.app',
+  ],
+};
+
+app.use('*', async (c, next) => {
+  const env = c.env.ENVIRONMENT || 'development';
+  const origin = c.req.header('Origin') || '';
+  const allowed = ALLOWED_ORIGINS[env];
+  const isAllowed = !allowed || allowed.includes(origin);
+  if (c.req.method === 'OPTIONS') {
+    const headers: Record<string, string> = {
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Max-Age': '86400',
+    };
+    if (isAllowed && origin) headers['Access-Control-Allow-Origin'] = origin;
+    else if (!allowed) headers['Access-Control-Allow-Origin'] = '*';
+    return new Response(null, { status: 204, headers });
+  }
+  await next();
+  if (origin) {
+    if (isAllowed) {
+      c.res.headers.set('Access-Control-Allow-Origin', origin);
+      c.res.headers.set('Vary', 'Origin');
+    } else if (!allowed) {
+      c.res.headers.set('Access-Control-Allow-Origin', '*');
+    }
+  }
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AUTH MIDDLEWARE — Edge-based JWT + RBAC
