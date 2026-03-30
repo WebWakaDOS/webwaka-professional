@@ -315,6 +315,118 @@ export interface NBAProfile {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// EVENT MANAGEMENT MODULE
+// Blueprint Reference: Part 9.2 — Multi-Tenant, Event-Driven
+// Blueprint Reference: Part 9.1 — Nigeria First, Offline First
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type EventStatus =
+  | 'DRAFT'
+  | 'PUBLISHED'
+  | 'REGISTRATION_OPEN'
+  | 'REGISTRATION_CLOSED'
+  | 'ONGOING'
+  | 'COMPLETED'
+  | 'CANCELLED';
+
+export type EventType =
+  | 'CONFERENCE'
+  | 'WORKSHOP'
+  | 'SEMINAR'
+  | 'WEBINAR'
+  | 'NETWORKING'
+  | 'TRAINING'
+  | 'GALA'
+  | 'EXHIBITION'
+  | 'CULTURAL'
+  | 'SPORTS'
+  | 'OTHER';
+
+export type RegistrationStatus =
+  | 'PENDING'
+  | 'CONFIRMED'
+  | 'CANCELLED'
+  | 'CHECKED_IN'
+  | 'NO_SHOW';
+
+/** RBAC roles for the Event Management module */
+export type EventManagementRole = 'TENANT_ADMIN' | 'EVENT_MANAGER' | 'ATTENDEE' | 'GUEST';
+
+export interface ManagedEvent {
+  /** Surrogate primary key */
+  id: string;
+  /** Multi-tenancy invariant — Part 9.2 */
+  tenantId: string;
+  /** Event title */
+  title: string;
+  /** Detailed description */
+  description: string | null;
+  /** Event type classification */
+  eventType: EventType;
+  /** Workflow status */
+  status: EventStatus;
+  /** Venue name */
+  venue: string;
+  /** Street address of the venue */
+  address: string;
+  /** City/LGA — Nigeria First */
+  city: string;
+  /** Nigerian state — Nigeria First */
+  state: string;
+  /** Online meeting URL (for webinars/hybrid events) */
+  onlineUrl: string | null;
+  /** Event start — UTC Unix timestamp (ms) */
+  startDate: number;
+  /** Event end — UTC Unix timestamp (ms) */
+  endDate: number;
+  /** Registration deadline — UTC Unix timestamp (ms) */
+  registrationDeadline: number | null;
+  /** Maximum attendee capacity (null = unlimited) */
+  capacity: number | null;
+  /** Ticket price in kobo (0 = free) — Part 9.2 Monetary Values */
+  ticketPriceKobo: number;
+  /** Currency code — Part 9.1 Africa First */
+  currency: string;
+  /** Organiser user ID */
+  organizerId: string;
+  /** R2 storage key for the event banner image */
+  bannerStorageKey: string | null;
+  /** Public URL for the event banner */
+  bannerUrl: string | null;
+  /** JSON array of tags */
+  tags: string;
+  /** Version for optimistic concurrency — Part 6 */
+  version: number;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+}
+
+export interface EventRegistration {
+  id: string;
+  tenantId: string;
+  /** FK to managed_events */
+  eventId: string;
+  /** Platform user ID (null for guest registrations) */
+  attendeeId: string | null;
+  attendeeName: string;
+  attendeeEmail: string;
+  attendeePhone: string;
+  status: RegistrationStatus;
+  /** Human-readable ticket reference (e.g., WW-EVT-2026-001) */
+  ticketRef: string;
+  /** Amount paid in kobo (0 for free events) */
+  amountPaidKobo: number;
+  /** Paystack/Flutterwave payment reference — Part 9.1 Nigeria First */
+  paymentReference: string | null;
+  /** Check-in timestamp — UTC Unix timestamp (ms) */
+  checkedInAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // D1 MIGRATION SQL
 // Blueprint Reference: Part 3 (Layer 3 — Edge-Native Data Architecture)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -484,4 +596,66 @@ CREATE TABLE IF NOT EXISTS nba_profiles (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_nba_profiles_bar_number ON nba_profiles(barNumber);
 CREATE INDEX IF NOT EXISTS idx_nba_profiles_tenant ON nba_profiles(tenantId);
 CREATE INDEX IF NOT EXISTS idx_nba_profiles_user ON nba_profiles(userId);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- EVENT MANAGEMENT MODULE
+-- Blueprint Reference: Part 9.2 — Multi-Tenant, Event-Driven
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS managed_events (
+  id TEXT PRIMARY KEY,
+  tenantId TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  eventType TEXT NOT NULL CHECK (eventType IN ('CONFERENCE','WORKSHOP','SEMINAR','WEBINAR','NETWORKING','TRAINING','GALA','EXHIBITION','CULTURAL','SPORTS','OTHER')),
+  status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT','PUBLISHED','REGISTRATION_OPEN','REGISTRATION_CLOSED','ONGOING','COMPLETED','CANCELLED')),
+  venue TEXT NOT NULL,
+  address TEXT NOT NULL,
+  city TEXT NOT NULL,
+  state TEXT NOT NULL,
+  onlineUrl TEXT,
+  startDate INTEGER NOT NULL,
+  endDate INTEGER NOT NULL,
+  registrationDeadline INTEGER,
+  capacity INTEGER,
+  ticketPriceKobo INTEGER NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL DEFAULT 'NGN',
+  organizerId TEXT NOT NULL,
+  bannerStorageKey TEXT,
+  bannerUrl TEXT,
+  tags TEXT NOT NULL DEFAULT '[]',
+  version INTEGER NOT NULL DEFAULT 1,
+  createdAt INTEGER NOT NULL,
+  updatedAt INTEGER NOT NULL,
+  deletedAt INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_managed_events_tenant ON managed_events(tenantId);
+CREATE INDEX IF NOT EXISTS idx_managed_events_status ON managed_events(tenantId, status);
+CREATE INDEX IF NOT EXISTS idx_managed_events_start ON managed_events(tenantId, startDate);
+CREATE INDEX IF NOT EXISTS idx_managed_events_organiser ON managed_events(tenantId, organizerId);
+
+CREATE TABLE IF NOT EXISTS event_registrations (
+  id TEXT PRIMARY KEY,
+  tenantId TEXT NOT NULL,
+  eventId TEXT NOT NULL REFERENCES managed_events(id),
+  attendeeId TEXT,
+  attendeeName TEXT NOT NULL,
+  attendeeEmail TEXT NOT NULL,
+  attendeePhone TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','CONFIRMED','CANCELLED','CHECKED_IN','NO_SHOW')),
+  ticketRef TEXT NOT NULL,
+  amountPaidKobo INTEGER NOT NULL DEFAULT 0,
+  paymentReference TEXT,
+  checkedInAt INTEGER,
+  createdAt INTEGER NOT NULL,
+  updatedAt INTEGER NOT NULL,
+  deletedAt INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_registrations_event ON event_registrations(eventId);
+CREATE INDEX IF NOT EXISTS idx_event_registrations_tenant ON event_registrations(tenantId);
+CREATE INDEX IF NOT EXISTS idx_event_registrations_attendee ON event_registrations(tenantId, attendeeId);
+CREATE INDEX IF NOT EXISTS idx_event_registrations_status ON event_registrations(tenantId, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_event_registrations_ticket ON event_registrations(ticketRef);
 `;

@@ -30,15 +30,32 @@ export type LegalEventType =
   | 'legal.document.uploaded'
   | 'legal.nba.profile_verified';
 
+export type EventMgmtEventType =
+  | 'event_mgmt.event.created'
+  | 'event_mgmt.event.published'
+  | 'event_mgmt.event.registration_opened'
+  | 'event_mgmt.event.registration_closed'
+  | 'event_mgmt.event.cancelled'
+  | 'event_mgmt.event.completed'
+  | 'event_mgmt.event.updated'
+  | 'event_mgmt.event.banner_uploaded'
+  | 'event_mgmt.registration.created'
+  | 'event_mgmt.registration.confirmed'
+  | 'event_mgmt.registration.cancelled'
+  | 'event_mgmt.registration.checked_in';
+
+export type PlatformEventType = LegalEventType | EventMgmtEventType;
+export type PlatformSourceModule = 'legal_practice' | 'event_management';
+
 export interface PlatformEvent<T = Record<string, unknown>> {
   /** Unique event ID */
   id: string;
   /** Multi-tenancy invariant — Part 9.2 */
   tenantId: string;
   /** Event type following dot-notation convention */
-  type: LegalEventType;
+  type: PlatformEventType;
   /** Source module identifier */
-  sourceModule: 'legal_practice';
+  sourceModule: PlatformSourceModule;
   /** UTC Unix timestamp (ms) */
   timestamp: number;
   /** Event payload */
@@ -54,7 +71,7 @@ type EventHandler<T = Record<string, unknown>> = (event: PlatformEvent<T>) => vo
 class LocalEventBus {
   private handlers: Map<string, EventHandler[]> = new Map();
 
-  subscribe<T = Record<string, unknown>>(eventType: LegalEventType, handler: EventHandler<T>): void {
+  subscribe<T = Record<string, unknown>>(eventType: PlatformEventType, handler: EventHandler<T>): void {
     const existing = this.handlers.get(eventType) ?? [];
     this.handlers.set(eventType, [...existing, handler as EventHandler]);
   }
@@ -148,6 +165,21 @@ export function createEvent<T = Record<string, unknown>>(
     tenantId,
     type,
     sourceModule: 'legal_practice',
+    timestamp: Date.now(),
+    payload
+  };
+}
+
+export function createEventMgmtEvent<T = Record<string, unknown>>(
+  tenantId: string,
+  type: EventMgmtEventType,
+  payload: T
+): PlatformEvent<T> {
+  return {
+    id: generateEventId(),
+    tenantId,
+    type,
+    sourceModule: 'event_management',
     timestamp: Date.now(),
     payload
   };
