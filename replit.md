@@ -54,11 +54,13 @@ public/                         # Static assets, PWA manifest, service worker
 
 ## Worker Routing (src/worker.ts)
 
-| Path prefix     | Module             |
-|-----------------|-------------------|
-| `/api/legal/*`  | Legal Practice     |
-| `/api/events/*` | Event Management   |
-| `/health`       | Platform health    |
+| Path prefix          | Module             | Auth required |
+|----------------------|--------------------|---------------|
+| `/api/legal/*`       | Legal Practice     | Yes (JWT)     |
+| `/api/events/*`      | Event Management   | Yes (JWT)     |
+| `/webhooks/legal/*`  | Legal Practice     | No (Paystack HMAC-SHA512) |
+| `/webhooks/events/*` | Event Management   | No (Paystack HMAC-SHA512) |
+| `/health`            | Platform health    | No            |
 
 ## Event Management Module
 
@@ -79,9 +81,9 @@ All amounts in the **smallest currency unit** (kobo for NGN = 1/100 Naira). Alwa
 
 ## Test Suite
 
-- **247 tests total — 0 failures**
-- Legal Practice: 91 tests (utils, DB, API, sync, i18n layers)
-- Event Management: 156 tests (utils, event bus, RBAC, API, DB layers)
+- **281 tests total — 0 failures**
+- Legal Practice: 109 tests (utils, DB, API, sync, i18n, payment routes, webhook)
+- Event Management: 172 tests (utils, event bus, RBAC, API, DB, payment routes, webhook)
 - Run: `npm test`
 
 ## Development
@@ -115,4 +117,12 @@ See `.env.example` for required variables. Cloudflare bindings (D1, R2, KV) are 
 | 0.6 | `core/env.ts` (WorkerEnv), `core/payments/paystack.ts` | ✅ Complete |
 | 0.7 | Sync client extended with EventManagementOfflineDB | ✅ Complete |
 | 0.8 | `wrangler.toml` updated; 247 tests passing | ✅ Complete |
-| 1–8 | Payment integration, notifications, portals, analytics, new modules | Pending |
+| 1.1 | `markRegistrationPaid` DB function (event_registrations) | ✅ Complete |
+| 1.2 | `PAYSTACK_SECRET_KEY` in both module Env interfaces | ✅ Complete |
+| 1.3 | `POST /api/legal/invoices/:id/pay` — Paystack init for invoices | ✅ Complete |
+| 1.4 | `POST /webhooks/legal/paystack` — invoice payment webhook (HMAC-SHA512) | ✅ Complete |
+| 1.5 | `POST /api/events/:eventId/registrations/:id/pay` — Paystack init for registrations | ✅ Complete |
+| 1.6 | `POST /webhooks/events/paystack` — registration payment webhook (HMAC-SHA512) | ✅ Complete |
+| 1.7 | Worker routing for `/webhooks/legal/*` and `/webhooks/events/*` | ✅ Complete |
+| 1.8 | Payment tests — 34 new tests; 281 total passing | ✅ Complete |
+| 2–8 | Notifications, documents, client portals, analytics, new modules | Pending |

@@ -11,6 +11,7 @@
 import { Hono } from 'hono';
 import { createLogger } from '../../../core/logger';
 import { publishEvent, createEvent } from '../../../core/event-bus';
+import { PaystackClient, generatePaystackReference, type PaystackWebhookEvent } from '../../../core/payments/paystack';
 import {
   getClientsByTenant,
   getClientById,
@@ -76,6 +77,7 @@ export interface Env {
   RATE_LIMIT_KV?: KVNamespace;
   EVENT_BUS_URL?: string;
   EVENT_BUS_API_KEY?: string;
+  PAYSTACK_SECRET_KEY?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -758,6 +760,64 @@ app.post('/api/legal/invoices/:id/mark-paid', async (c) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PAYSTACK PAYMENT INITIALIZATION
+// Blueprint Reference: Part 9.1 — "Nigeria First: Paystack is the primary payment gateway."
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.post('/api/legal/invoices/:id/pay', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const id = c.req.param('id');
+
+  if (!c.env.PAYSTACK_SECRET_KEY) {
+    return c.json<ApiResponse>(fail(['Payment gateway not configured']), 400);
+  }
+
+  try {
+    const { email } = await c.req.json<{ email: string }>().catch(() => ({ email: '' }));
+    if (!email) {
+      return c.json<ApiResponse>(fail(['Client email is required for payment initialization']), 400);
+    }
+
+    const invoice = await getInvoiceById(c.env.DB, tenantId, id);
+    if (!invoice) {
+      return c.json<ApiResponse>(fail(['Invoice not found']), 404);
+    }
+
+    if (invoice.status !== 'SENT') {
+      return c.json<ApiResponse>(fail([`Invoice cannot be paid in status: ${invoice.status}`]), 400);
+    }
+
+    const reference = generatePaystackReference('INV');
+    const paystack = new PaystackClient(c.env.PAYSTACK_SECRET_KEY);
+    const result = await paystack.initializeTransaction({
+      email,
+      amountKobo: invoice.totalKobo,
+      reference,
+      currency: (invoice.currency as 'NGN') || 'NGN',
+      metadata: { invoiceId: id, tenantId, invoiceNumber: invoice.invoiceNumber }
+    });
+
+    if (!result.status) {
+      logger.error('Paystack init failed', { tenantId, invoiceId: id, message: result.message });
+      return c.json<ApiResponse>(fail([result.message || 'Payment initialization failed']), 402);
+    }
+
+    logger.info('Paystack payment initialized', { tenantId, invoiceId: id, reference });
+    return c.json<ApiResponse>(ok({
+      authorizationUrl: result.data.authorization_url,
+      accessCode: result.data.access_code,
+      reference: result.data.reference,
+      invoiceId: id,
+      amountKobo: invoice.totalKobo,
+      currency: invoice.currency
+    }));
+  } catch (error) {
+    logger.error('Payment initialization failed', { tenantId, id, error: String(error) });
+    return c.json<ApiResponse>(fail(['Payment initialization failed']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DOCUMENTS ROUTES
 // Blueprint Reference: Part 10.8 — "Document management"
 // Blueprint Reference: Part 9.2 — R2 storage (no file bytes in DB)
@@ -940,6 +1000,63 @@ app.post('/api/legal/nba/profiles/:id/verify', async (c) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // SYNC ENDPOINT — CORE-1 Universal Offline Sync Engine
 // Blueprint Reference: Part 6 — "IndexedDB → Mutation Queue → Sync API → Server reconciliation"
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAYSTACK WEBHOOK — Invoice Payment Confirmation
+// Blueprint Reference: Part 9.1 — "Nigeria First: Paystack is the primary payment gateway."
+// Blueprint Reference: Part 9.3 — "Event-Driven: Payment confirmations published."
+// Note: Route is at /webhooks/ (not /api/) to bypass the auth middleware.
+//       Paystack authenticates via HMAC-SHA512 x-paystack-signature header.
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.post('/webhooks/legal/paystack', async (c) => {
+  if (!c.env.PAYSTACK_SECRET_KEY) {
+    logger.error('Paystack webhook received but secret key not configured');
+    return c.json<ApiResponse>(fail(['Payment gateway not configured']), 500);
+  }
+
+  const rawBody = await c.req.text();
+  const signature = c.req.header('x-paystack-signature') ?? '';
+
+  const isValid = await PaystackClient.verifyWebhookSignature(rawBody, signature, c.env.PAYSTACK_SECRET_KEY);
+  if (!isValid) {
+    logger.warn('Paystack webhook signature verification failed');
+    return c.json<ApiResponse>(fail(['Invalid webhook signature']), 401);
+  }
+
+  try {
+    const event = JSON.parse(rawBody) as PaystackWebhookEvent;
+
+    if (event.event === 'charge.success') {
+      const { reference, metadata } = event.data;
+      const invoiceId = (metadata as Record<string, string> | null)?.['invoiceId'];
+      const tenantId = (metadata as Record<string, string> | null)?.['tenantId'];
+
+      if (invoiceId && tenantId) {
+        await markInvoicePaid(c.env.DB, tenantId, invoiceId, reference);
+        const invoice = await getInvoiceById(c.env.DB, tenantId, invoiceId);
+        await publishEvent(
+          createEvent(tenantId, 'legal.invoice.paid', {
+            invoiceId,
+            paymentReference: reference,
+            totalKobo: invoice?.totalKobo ?? 0
+          }),
+          { EVENT_BUS_URL: c.env.EVENT_BUS_URL, EVENT_BUS_API_KEY: c.env.EVENT_BUS_API_KEY }
+        );
+        logger.info('Invoice paid via Paystack webhook', { tenantId, invoiceId, reference });
+      }
+    }
+
+    return c.json<ApiResponse>(ok({ received: true }));
+  } catch (error) {
+    logger.error('Paystack webhook processing error', { error: String(error) });
+    return c.json<ApiResponse>(fail(['Webhook processing failed']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OFFLINE SYNC ROUTE
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface SyncMutation {

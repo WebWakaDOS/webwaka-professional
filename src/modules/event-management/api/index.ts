@@ -16,6 +16,7 @@
 import { Hono } from 'hono';
 import { createLogger } from '../../../core/logger';
 import { publishEvent, createEventMgmtEvent } from '../../../core/event-bus';
+import { PaystackClient, generatePaystackReference, type PaystackWebhookEvent } from '../../../core/payments/paystack';
 import {
   getEventsByTenant,
   getEventById,
@@ -31,6 +32,7 @@ import {
   getRegistrationCountForEvent,
   insertRegistration,
   updateRegistrationStatus,
+  markRegistrationPaid,
   getDashboardStats,
   type D1Database
 } from '../db/queries';
@@ -69,6 +71,7 @@ export interface Env {
   RATE_LIMIT_KV?: KVNamespace;
   EVENT_BUS_URL?: string;
   EVENT_BUS_API_KEY?: string;
+  PAYSTACK_SECRET_KEY?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1046,6 +1049,117 @@ app.post('/api/events/:eventId/check-in', async (c) => {
   } catch (error) {
     logger.error('Failed to check in attendee', { tenantId, eventId, error: String(error) });
     return c.json<ApiResponse>(fail(['Failed to process check-in']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAYSTACK PAYMENT INITIALIZATION — Event Registration
+// Blueprint Reference: Part 9.1 — "Nigeria First: Paystack is the primary payment gateway."
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.post('/api/events/:eventId/registrations/:id/pay', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const eventId = c.req.param('eventId');
+  const id = c.req.param('id');
+
+  if (!c.env.PAYSTACK_SECRET_KEY) {
+    return c.json<ApiResponse>(fail(['Payment gateway not configured']), 400);
+  }
+
+  try {
+    const registration = await getRegistrationById(c.env.DB, tenantId, id);
+    if (!registration || registration.eventId !== eventId) {
+      return c.json<ApiResponse>(fail(['Registration not found']), 404);
+    }
+
+    if (registration.status === 'CONFIRMED') {
+      return c.json<ApiResponse>(ok({ alreadyPaid: true, status: 'CONFIRMED' }));
+    }
+
+    if (registration.status !== 'PENDING') {
+      return c.json<ApiResponse>(fail([`Registration cannot be paid in status: ${registration.status}`]), 400);
+    }
+
+    if (registration.amountPaidKobo === 0) {
+      const now = nowUTC();
+      await updateRegistrationStatus(c.env.DB, tenantId, id, 'CONFIRMED', now);
+      return c.json<ApiResponse>(ok({ confirmed: true, freeEvent: true }));
+    }
+
+    const reference = generatePaystackReference('EVT');
+    const paystack = new PaystackClient(c.env.PAYSTACK_SECRET_KEY);
+    const result = await paystack.initializeTransaction({
+      email: registration.attendeeEmail,
+      amountKobo: registration.amountPaidKobo,
+      reference,
+      metadata: { registrationId: id, eventId, tenantId, ticketRef: registration.ticketRef }
+    });
+
+    if (!result.status) {
+      logger.error('Paystack init failed', { tenantId, registrationId: id, message: result.message });
+      return c.json<ApiResponse>(fail([result.message || 'Payment initialization failed']), 402);
+    }
+
+    logger.info('Paystack payment initialized', { tenantId, registrationId: id, reference });
+    return c.json<ApiResponse>(ok({
+      authorizationUrl: result.data.authorization_url,
+      accessCode: result.data.access_code,
+      reference: result.data.reference,
+      registrationId: id,
+      amountKobo: registration.amountPaidKobo
+    }));
+  } catch (error) {
+    logger.error('Payment initialization failed', { tenantId, eventId, id, error: String(error) });
+    return c.json<ApiResponse>(fail(['Payment initialization failed']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAYSTACK WEBHOOK — Registration Payment Confirmation
+// Blueprint Reference: Part 9.1 — "Nigeria First: Paystack is the primary payment gateway."
+// Note: Route is at /webhooks/ (not /api/) to bypass the auth middleware.
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.post('/webhooks/events/paystack', async (c) => {
+  if (!c.env.PAYSTACK_SECRET_KEY) {
+    logger.error('Paystack webhook received but secret key not configured');
+    return c.json<ApiResponse>(fail(['Payment gateway not configured']), 500);
+  }
+
+  const rawBody = await c.req.text();
+  const signature = c.req.header('x-paystack-signature') ?? '';
+
+  const isValid = await PaystackClient.verifyWebhookSignature(rawBody, signature, c.env.PAYSTACK_SECRET_KEY);
+  if (!isValid) {
+    logger.warn('Paystack events webhook signature verification failed');
+    return c.json<ApiResponse>(fail(['Invalid webhook signature']), 401);
+  }
+
+  try {
+    const event = JSON.parse(rawBody) as PaystackWebhookEvent;
+
+    if (event.event === 'charge.success') {
+      const { reference, metadata } = event.data;
+      const registrationId = (metadata as Record<string, string> | null)?.['registrationId'];
+      const tenantId = (metadata as Record<string, string> | null)?.['tenantId'];
+
+      if (registrationId && tenantId) {
+        await markRegistrationPaid(c.env.DB, tenantId, registrationId, reference);
+        await publishEvent(
+          createEventMgmtEvent(tenantId, 'event_mgmt.registration.payment_confirmed', {
+            registrationId,
+            paymentReference: reference
+          }),
+          { EVENT_BUS_URL: c.env.EVENT_BUS_URL, EVENT_BUS_API_KEY: c.env.EVENT_BUS_API_KEY }
+        );
+        logger.info('Registration confirmed via Paystack webhook', { tenantId, registrationId, reference });
+      }
+    }
+
+    return c.json<ApiResponse>(ok({ received: true }));
+  } catch (error) {
+    logger.error('Paystack events webhook processing error', { error: String(error) });
+    return c.json<ApiResponse>(fail(['Webhook processing failed']), 500);
   }
 });
 

@@ -9,9 +9,11 @@
  * with its own CORS policy, auth middleware, and business logic.
  *
  * ─── Module Routing ───────────────────────────────────────────────────────────
- *   /api/legal/*       → Legal Practice module (NBA compliance, cases, invoices)
- *   /api/events/*      → Event Management module (events, registrations, check-in)
- *   /health            → Platform health check
+ *   /api/legal/*           → Legal Practice module (NBA compliance, cases, invoices)
+ *   /api/events/*          → Event Management module (events, registrations, check-in)
+ *   /webhooks/legal/*      → Legal Practice webhooks (Paystack — no auth middleware)
+ *   /webhooks/events/*     → Event Management webhooks (Paystack — no auth middleware)
+ *   /health                → Platform health check
  * ────────────────────────────────────────────────────────────────────────────
  *
  * To add a new module:
@@ -58,14 +60,14 @@ export default {
     }
 
     // ── Legal Practice module ──────────────────────────────────────────────
-    // Routes: /api/legal/*, /health (module-level)
-    if (path.startsWith('/api/legal')) {
+    // Routes: /api/legal/*, /webhooks/legal/* (webhook bypasses auth middleware)
+    if (path.startsWith('/api/legal') || path.startsWith('/webhooks/legal')) {
       return legalApp.fetch(request, env, ctx);
     }
 
     // ── Event Management module ────────────────────────────────────────────
-    // Routes: /api/events/*, /health (module-level)
-    if (path.startsWith('/api/events')) {
+    // Routes: /api/events/*, /webhooks/events/* (webhook bypasses auth middleware)
+    if (path.startsWith('/api/events') || path.startsWith('/webhooks/events')) {
       return eventApp.fetch(request, env, ctx);
     }
 

@@ -739,3 +739,373 @@ describe('API Response Format (Blueprint Part 9.2 — { success: true, data: ...
     expect(response.errors).toHaveLength(2);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAYSTACK UTILITY TESTS
+// Blueprint Reference: Part 9.1 — "Nigeria First: Paystack is the primary payment gateway."
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { generatePaystackReference } from '../../core/payments/paystack';
+
+describe('generatePaystackReference', () => {
+  it('generates a reference starting with WW-INV- for INV prefix', () => {
+    const ref = generatePaystackReference('INV');
+    expect(ref.startsWith('WW-INV-')).toBe(true);
+  });
+
+  it('generates a reference starting with WW-EVT- for EVT prefix', () => {
+    const ref = generatePaystackReference('EVT');
+    expect(ref.startsWith('WW-EVT-')).toBe(true);
+  });
+
+  it('generates unique references for the same prefix', () => {
+    const refs = new Set(Array.from({ length: 20 }, () => generatePaystackReference('INV')));
+    expect(refs.size).toBe(20);
+  });
+
+  it('reference is a string', () => {
+    expect(typeof generatePaystackReference('INV')).toBe('string');
+  });
+
+  it('reference has length > 10', () => {
+    expect(generatePaystackReference('PAY').length).toBeGreaterThan(10);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYER 4 — LEGAL PRACTICE API PAYMENT ROUTE TESTS
+// Blueprint Reference: Part 9.1 — "Nigeria First: Paystack is the primary payment gateway."
+// Blueprint Reference: Part 9.2 — "RBAC on all restricted endpoints"
+// ─────────────────────────────────────────────────────────────────────────────
+
+import legalApp from './api/index';
+
+interface MockInvoice {
+  id: string;
+  tenantId: string;
+  status: string;
+  totalKobo: number;
+  currency: string;
+  invoiceNumber: string;
+  [key: string]: unknown;
+}
+
+function createLegalMockD1(invoices: MockInvoice[] = []) {
+  return {
+    prepare: (sql: string) => ({
+      bind: (..._args: unknown[]) => ({
+        first: async () => {
+          if (sql.includes('legal_invoices') && sql.includes('WHERE id = ?')) {
+            return invoices[0] ?? null;
+          }
+          return null;
+        },
+        all: async () => ({ results: [] }),
+        run: async () => ({ success: true, meta: { changes: 1 } })
+      })
+    }),
+    exec: async () => ({ count: 0, duration: 0 })
+  };
+}
+
+const LEGAL_JWT_SECRET = 'test_secret_key_32chars_minimum!';
+
+async function makeLegalJWT(payload: Record<string, unknown>): Promise<string> {
+  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
+    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const body = btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600, ...payload }))
+    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw', encoder.encode(LEGAL_JWT_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(`${header}.${body}`));
+  const sigB64 = btoa(String.fromCharCode(...new Uint8Array(sig)))
+    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  return `${header}.${body}.${sigB64}`;
+}
+
+async function makeLegalRequest(
+  method: string,
+  path: string,
+  role: 'admin' | 'attorney' | 'paralegal' | 'client',
+  body?: unknown,
+  db = createLegalMockD1(),
+  paystackKey?: string
+): Promise<Response> {
+  const token = await makeLegalJWT({ sub: 'user_1', tenantId: 'tenant_1', role });
+  return legalApp.request(path, {
+    method,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: body ? JSON.stringify(body) : undefined
+  }, {
+    DB: db,
+    DOCUMENTS: {} as R2Bucket,
+    TENANT_CONFIG: {} as KVNamespace,
+    EVENTS: {} as KVNamespace,
+    JWT_SECRET: LEGAL_JWT_SECRET,
+    ENVIRONMENT: 'development',
+    ...(paystackKey ? { PAYSTACK_SECRET_KEY: paystackKey } : {})
+  } as unknown as Record<string, unknown>);
+}
+
+async function makeLegalPaystackSignature(body: string, secret: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw', encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-512' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
+  return Array.from(new Uint8Array(sig))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+// ── POST /api/legal/invoices/:id/pay ─────────────────────────────────────────
+
+describe('POST /api/legal/invoices/:id/pay', () => {
+  it('returns 400 when PAYSTACK_SECRET_KEY is not configured', async () => {
+    const db = createLegalMockD1([{
+      id: 'inv_1', tenantId: 'tenant_1', status: 'SENT',
+      totalKobo: 5000000, currency: 'NGN', invoiceNumber: 'INV-2026-001'
+    }]);
+    const res = await makeLegalRequest('POST', '/api/legal/invoices/inv_1/pay', 'admin',
+      { email: 'client@example.com' }, db);
+    expect(res.status).toBe(400);
+    const body = await res.json() as { success: boolean; errors: string[] };
+    expect(body.success).toBe(false);
+    expect(body.errors[0]).toContain('Payment gateway not configured');
+  });
+
+  it('returns 400 when email is missing from request body', async () => {
+    const db = createLegalMockD1([{
+      id: 'inv_1', tenantId: 'tenant_1', status: 'SENT',
+      totalKobo: 5000000, currency: 'NGN', invoiceNumber: 'INV-2026-001'
+    }]);
+    const res = await makeLegalRequest('POST', '/api/legal/invoices/inv_1/pay', 'admin',
+      {}, db, 'sk_test_key');
+    expect(res.status).toBe(400);
+    const body = await res.json() as { success: boolean; errors: string[] };
+    expect(body.success).toBe(false);
+    expect(body.errors[0]).toContain('email');
+  });
+
+  it('returns 404 when invoice not found', async () => {
+    const res = await makeLegalRequest('POST', '/api/legal/invoices/nonexistent/pay', 'admin',
+      { email: 'client@example.com' }, createLegalMockD1(), 'sk_test_key');
+    expect(res.status).toBe(404);
+    const body = await res.json() as { success: boolean; errors: string[] };
+    expect(body.success).toBe(false);
+    expect(body.errors[0]).toContain('Invoice not found');
+  });
+
+  it('returns 400 when invoice status is DRAFT (not SENT)', async () => {
+    const db = createLegalMockD1([{
+      id: 'inv_1', tenantId: 'tenant_1', status: 'DRAFT',
+      totalKobo: 5000000, currency: 'NGN', invoiceNumber: 'INV-2026-001'
+    }]);
+    const res = await makeLegalRequest('POST', '/api/legal/invoices/inv_1/pay', 'admin',
+      { email: 'client@example.com' }, db, 'sk_test_key');
+    expect(res.status).toBe(400);
+    const body = await res.json() as { success: boolean; errors: string[] };
+    expect(body.success).toBe(false);
+    expect(body.errors[0]).toContain('DRAFT');
+  });
+
+  it('returns 400 when invoice status is PAID', async () => {
+    const db = createLegalMockD1([{
+      id: 'inv_1', tenantId: 'tenant_1', status: 'PAID',
+      totalKobo: 5000000, currency: 'NGN', invoiceNumber: 'INV-2026-001'
+    }]);
+    const res = await makeLegalRequest('POST', '/api/legal/invoices/inv_1/pay', 'admin',
+      { email: 'client@example.com' }, db, 'sk_test_key');
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 200 with authorizationUrl when Paystack init succeeds', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: true,
+        message: 'Authorization URL created',
+        data: {
+          authorization_url: 'https://checkout.paystack.com/access_code_abc',
+          access_code: 'ACCESS_CODE_ABC',
+          reference: 'WW-INV-abc123'
+        }
+      })
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const db = createLegalMockD1([{
+      id: 'inv_1', tenantId: 'tenant_1', status: 'SENT',
+      totalKobo: 5000000, currency: 'NGN', invoiceNumber: 'INV-2026-001'
+    }]);
+    const res = await makeLegalRequest('POST', '/api/legal/invoices/inv_1/pay', 'admin',
+      { email: 'client@example.com' }, db, 'sk_test_paystack');
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { success: boolean; data: { authorizationUrl: string; invoiceId: string; amountKobo: number } };
+    expect(body.success).toBe(true);
+    expect(body.data.authorizationUrl).toContain('paystack.com');
+    expect(body.data.invoiceId).toBe('inv_1');
+    expect(body.data.amountKobo).toBe(5000000);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('returns 402 when Paystack initialization fails', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({ status: false, message: 'Invalid key' })
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const db = createLegalMockD1([{
+      id: 'inv_1', tenantId: 'tenant_1', status: 'SENT',
+      totalKobo: 5000000, currency: 'NGN', invoiceNumber: 'INV-2026-001'
+    }]);
+    const res = await makeLegalRequest('POST', '/api/legal/invoices/inv_1/pay', 'admin',
+      { email: 'client@example.com' }, db, 'sk_test_paystack');
+
+    expect(res.status).toBe(402);
+    const body = await res.json() as { success: boolean; errors: string[] };
+    expect(body.success).toBe(false);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('requires authentication — returns 401 with no token', async () => {
+    const res = await legalApp.request('/api/legal/invoices/inv_1/pay', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'client@example.com' })
+    }, {
+      DB: createLegalMockD1(),
+      JWT_SECRET: LEGAL_JWT_SECRET,
+      DOCUMENTS: {}, TENANT_CONFIG: {}, EVENTS: {}
+    } as unknown as Record<string, unknown>);
+    expect(res.status).toBe(401);
+  });
+});
+
+// ── POST /webhooks/legal/paystack ─────────────────────────────────────────────
+
+describe('POST /webhooks/legal/paystack', () => {
+  const PAYSTACK_SECRET = 'sk_test_paystack_webhook_secret';
+
+  it('returns 500 when PAYSTACK_SECRET_KEY is not configured', async () => {
+    const rawBody = JSON.stringify({ event: 'charge.success', data: { reference: 'ref123', metadata: {} } });
+    const res = await legalApp.request('/webhooks/legal/paystack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-paystack-signature': 'anysig' },
+      body: rawBody
+    }, {
+      DB: createLegalMockD1(),
+      JWT_SECRET: LEGAL_JWT_SECRET,
+      DOCUMENTS: {}, TENANT_CONFIG: {}, EVENTS: {}
+    } as unknown as Record<string, unknown>);
+    expect(res.status).toBe(500);
+  });
+
+  it('returns 401 for an invalid webhook signature', async () => {
+    const rawBody = JSON.stringify({ event: 'charge.success', data: { reference: 'ref123', metadata: {} } });
+    const res = await legalApp.request('/webhooks/legal/paystack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-paystack-signature': 'invalid_sig_here' },
+      body: rawBody
+    }, {
+      DB: createLegalMockD1(),
+      JWT_SECRET: LEGAL_JWT_SECRET,
+      PAYSTACK_SECRET_KEY: PAYSTACK_SECRET,
+      DOCUMENTS: {}, TENANT_CONFIG: {}, EVENTS: {}
+    } as unknown as Record<string, unknown>);
+    expect(res.status).toBe(401);
+    const body = await res.json() as { success: boolean; errors: string[] };
+    expect(body.success).toBe(false);
+    expect(body.errors[0]).toContain('signature');
+  });
+
+  it('returns 200 with received:true for charge.success with valid signature', async () => {
+    const webhookData = {
+      event: 'charge.success',
+      data: {
+        id: 1,
+        status: 'success',
+        reference: 'ref_abc123',
+        amount: 5000000,
+        currency: 'NGN',
+        paid_at: new Date().toISOString(),
+        customer: { email: 'client@example.com' },
+        metadata: { invoiceId: 'inv_1', tenantId: 'tenant_1' }
+      }
+    };
+    const rawBody = JSON.stringify(webhookData);
+    const signature = await makeLegalPaystackSignature(rawBody, PAYSTACK_SECRET);
+
+    const db = createLegalMockD1([{
+      id: 'inv_1', tenantId: 'tenant_1', status: 'SENT',
+      totalKobo: 5000000, currency: 'NGN', invoiceNumber: 'INV-2026-001'
+    }]);
+
+    const res = await legalApp.request('/webhooks/legal/paystack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-paystack-signature': signature },
+      body: rawBody
+    }, {
+      DB: db,
+      JWT_SECRET: LEGAL_JWT_SECRET,
+      PAYSTACK_SECRET_KEY: PAYSTACK_SECRET,
+      DOCUMENTS: {}, TENANT_CONFIG: {}, EVENTS: {}
+    } as unknown as Record<string, unknown>);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { success: boolean; data: { received: boolean } };
+    expect(body.success).toBe(true);
+    expect(body.data.received).toBe(true);
+  });
+
+  it('returns 200 for non-charge.success events (just acknowledges)', async () => {
+    const webhookData = { event: 'refund.processed', data: { reference: 'ref_xyz', metadata: null } };
+    const rawBody = JSON.stringify(webhookData);
+    const signature = await makeLegalPaystackSignature(rawBody, PAYSTACK_SECRET);
+
+    const res = await legalApp.request('/webhooks/legal/paystack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-paystack-signature': signature },
+      body: rawBody
+    }, {
+      DB: createLegalMockD1(),
+      JWT_SECRET: LEGAL_JWT_SECRET,
+      PAYSTACK_SECRET_KEY: PAYSTACK_SECRET,
+      DOCUMENTS: {}, TENANT_CONFIG: {}, EVENTS: {}
+    } as unknown as Record<string, unknown>);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { success: boolean; data: { received: boolean } };
+    expect(body.data.received).toBe(true);
+  });
+
+  it('does not require Authorization header (bypasses auth middleware)', async () => {
+    const webhookData = { event: 'charge.success', data: { reference: 'ref1', amount: 1000, metadata: null } };
+    const rawBody = JSON.stringify(webhookData);
+    const signature = await makeLegalPaystackSignature(rawBody, PAYSTACK_SECRET);
+
+    const res = await legalApp.request('/webhooks/legal/paystack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-paystack-signature': signature },
+      body: rawBody
+    }, {
+      DB: createLegalMockD1(),
+      JWT_SECRET: LEGAL_JWT_SECRET,
+      PAYSTACK_SECRET_KEY: PAYSTACK_SECRET,
+      DOCUMENTS: {}, TENANT_CONFIG: {}, EVENTS: {}
+    } as unknown as Record<string, unknown>);
+
+    expect(res.status).not.toBe(401);
+  });
+});

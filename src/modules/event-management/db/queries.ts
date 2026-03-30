@@ -302,6 +302,23 @@ export async function updateRegistrationStatus(
   }
 }
 
+export async function markRegistrationPaid(
+  db: D1Database,
+  tenantId: string,
+  registrationId: string,
+  paymentReference: string
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(`
+      UPDATE event_registrations
+      SET status = 'CONFIRMED', paymentReference = ?, updatedAt = ?
+      WHERE id = ? AND tenantId = ? AND deletedAt IS NULL
+    `)
+    .bind(paymentReference, now, registrationId, tenantId)
+    .run();
+}
+
 export async function getDashboardStats(
   db: D1Database,
   tenantId: string

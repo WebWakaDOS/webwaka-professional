@@ -1365,3 +1365,366 @@ describe('Schema type invariants', () => {
     expect(Number.isInteger(reg.amountPaidKobo)).toBe(true);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYER 5 — DB PAYMENT FUNCTION TESTS
+// Blueprint Reference: Part 9.1 — "Nigeria First: Paystack is the primary payment gateway."
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { markRegistrationPaid } from './db/queries';
+
+describe('markRegistrationPaid', () => {
+  it('calls UPDATE on event_registrations with CONFIRMED status', async () => {
+    let capturedSql = '';
+    let capturedArgs: unknown[] = [];
+    const db = {
+      prepare: (sql: string) => ({
+        bind: (...args: unknown[]) => {
+          capturedSql = sql;
+          capturedArgs = args;
+          return { run: async () => ({ success: true, meta: { changes: 1 } }) };
+        }
+      }),
+      exec: async () => ({ count: 0, duration: 0 })
+    };
+    await markRegistrationPaid(db as unknown as D1Database, 'tenant_1', 'reg_1', 'PAY_REF_001');
+    expect(capturedSql).toContain('event_registrations');
+    expect(capturedSql).toContain("status = 'CONFIRMED'");
+    expect(capturedSql).toContain('paymentReference');
+    expect(capturedArgs[0]).toBe('PAY_REF_001');
+    expect(capturedArgs[2]).toBe('reg_1');
+    expect(capturedArgs[3]).toBe('tenant_1');
+  });
+
+  it('scopes update to the correct tenantId', async () => {
+    let capturedArgs: unknown[] = [];
+    const db = {
+      prepare: (_sql: string) => ({
+        bind: (...args: unknown[]) => {
+          capturedArgs = args;
+          return { run: async () => ({ success: true, meta: { changes: 1 } }) };
+        }
+      }),
+      exec: async () => ({ count: 0, duration: 0 })
+    };
+    await markRegistrationPaid(db as unknown as D1Database, 'tenant_xyz', 'reg_42', 'REF_XYZ');
+    expect(capturedArgs).toContain('tenant_xyz');
+    expect(capturedArgs).toContain('reg_42');
+    expect(capturedArgs).toContain('REF_XYZ');
+  });
+
+  it('resolves without throwing on success', async () => {
+    const db = {
+      prepare: (_sql: string) => ({
+        bind: (..._args: unknown[]) => ({
+          run: async () => ({ success: true, meta: { changes: 1 } })
+        })
+      }),
+      exec: async () => ({ count: 0, duration: 0 })
+    };
+    await expect(
+      markRegistrationPaid(db as unknown as D1Database, 'tenant_1', 'reg_1', 'REF_123')
+    ).resolves.not.toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYER 4 — EVENT MANAGEMENT API PAYMENT ROUTE TESTS
+// Blueprint Reference: Part 9.1 — "Nigeria First: Paystack is the primary payment gateway."
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function makeEventsPaystackSignature(body: string, secret: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw', encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-512' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
+  return Array.from(new Uint8Array(sig))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function createMockD1WithRegistration(
+  events: MockEvent[] = [],
+  registrations: MockEvent[] = []
+) {
+  return {
+    prepare: (sql: string) => ({
+      bind: (..._args: unknown[]) => ({
+        first: async () => {
+          if (sql.includes('managed_events') && sql.includes('WHERE id = ?')) return events[0] ?? null;
+          if (sql.includes('event_registrations') && sql.includes('WHERE id = ?')) return registrations[0] ?? null;
+          if (sql.includes('COUNT(*)') && sql.includes('managed_events')) return { count: events.length };
+          if (sql.includes('COUNT(*)') && sql.includes('event_registrations')) return { count: registrations.length };
+          return null;
+        },
+        all: async () => {
+          if (sql.includes('managed_events')) return { results: events };
+          if (sql.includes('event_registrations')) return { results: registrations };
+          return { results: [] };
+        },
+        run: async () => ({ success: true, meta: { changes: 1 } })
+      })
+    }),
+    exec: async () => ({ count: 0, duration: 0 })
+  };
+}
+
+async function makePayRequest(
+  eventId: string,
+  registrationId: string,
+  role: EventManagementRole,
+  db = createMockD1(),
+  paystackKey?: string
+): Promise<Response> {
+  const token = await makeJWT({ sub: 'user_1', tenantId: 'tenant_1', role });
+  return app.request(`/api/events/${eventId}/registrations/${registrationId}/pay`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    }
+  }, {
+    DB: db,
+    DOCUMENTS: {} as R2Bucket,
+    TENANT_CONFIG: {} as KVNamespace,
+    EVENTS: {} as KVNamespace,
+    JWT_SECRET,
+    ENVIRONMENT: 'development',
+    ...(paystackKey ? { PAYSTACK_SECRET_KEY: paystackKey } : {})
+  } as unknown as Record<string, unknown>);
+}
+
+// ── POST /api/events/:eventId/registrations/:id/pay ───────────────────────────
+
+describe('POST /api/events/:eventId/registrations/:id/pay', () => {
+  it('returns 400 when PAYSTACK_SECRET_KEY is not configured', async () => {
+    const db = createMockD1WithRegistration(
+      [{ id: 'evt_1', tenantId: 'tenant_1', title: 'Test', status: 'OPEN', version: 1, startDate: Date.now() + 86400_000, endDate: Date.now() + 90000_000, ticketPriceKobo: 5000000, capacity: null }],
+      [{ id: 'reg_1', tenantId: 'tenant_1', eventId: 'evt_1', status: 'PENDING', amountPaidKobo: 5000000, attendeeEmail: 'test@test.com', ticketRef: 'WW-EVT-001', title: '', version: 1, startDate: 0, endDate: 0, ticketPriceKobo: 0, capacity: null }]
+    );
+    const res = await makePayRequest('evt_1', 'reg_1', 'TENANT_ADMIN', db);
+    expect(res.status).toBe(400);
+    const body = await res.json() as { success: boolean; errors: string[] };
+    expect(body.success).toBe(false);
+    expect(body.errors[0]).toContain('Payment gateway not configured');
+  });
+
+  it('returns 404 when registration not found', async () => {
+    const res = await makePayRequest('evt_1', 'nonexistent', 'TENANT_ADMIN', createMockD1(), 'sk_test');
+    expect(res.status).toBe(404);
+    const body = await res.json() as { success: boolean; errors: string[] };
+    expect(body.errors[0]).toContain('Registration not found');
+  });
+
+  it('returns 200 with alreadyPaid:true when registration is already CONFIRMED', async () => {
+    const db = createMockD1WithRegistration(
+      [],
+      [{ id: 'reg_1', tenantId: 'tenant_1', eventId: 'evt_1', status: 'CONFIRMED', amountPaidKobo: 5000000, attendeeEmail: 'test@test.com', ticketRef: 'WW-EVT-001', title: '', version: 1, startDate: 0, endDate: 0, ticketPriceKobo: 0, capacity: null }]
+    );
+    const res = await makePayRequest('evt_1', 'reg_1', 'TENANT_ADMIN', db, 'sk_test');
+    expect(res.status).toBe(200);
+    const body = await res.json() as { success: boolean; data: { alreadyPaid: boolean } };
+    expect(body.success).toBe(true);
+    expect(body.data.alreadyPaid).toBe(true);
+  });
+
+  it('returns 400 when registration is CANCELLED', async () => {
+    const db = createMockD1WithRegistration(
+      [],
+      [{ id: 'reg_1', tenantId: 'tenant_1', eventId: 'evt_1', status: 'CANCELLED', amountPaidKobo: 5000000, attendeeEmail: 'test@test.com', ticketRef: 'WW-EVT-001', title: '', version: 1, startDate: 0, endDate: 0, ticketPriceKobo: 0, capacity: null }]
+    );
+    const res = await makePayRequest('evt_1', 'reg_1', 'TENANT_ADMIN', db, 'sk_test');
+    expect(res.status).toBe(400);
+    const body = await res.json() as { success: boolean; errors: string[] };
+    expect(body.errors[0]).toContain('CANCELLED');
+  });
+
+  it('returns 200 with freeEvent:true for zero-kobo registration', async () => {
+    const db = createMockD1WithRegistration(
+      [],
+      [{ id: 'reg_1', tenantId: 'tenant_1', eventId: 'evt_1', status: 'PENDING', amountPaidKobo: 0, attendeeEmail: 'test@test.com', ticketRef: 'WW-EVT-001', title: '', version: 1, startDate: 0, endDate: 0, ticketPriceKobo: 0, capacity: null }]
+    );
+    const res = await makePayRequest('evt_1', 'reg_1', 'TENANT_ADMIN', db, 'sk_test');
+    expect(res.status).toBe(200);
+    const body = await res.json() as { success: boolean; data: { freeEvent: boolean } };
+    expect(body.success).toBe(true);
+    expect(body.data.freeEvent).toBe(true);
+  });
+
+  it('returns 200 with authorizationUrl when Paystack init succeeds', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: true,
+        message: 'Authorization URL created',
+        data: {
+          authorization_url: 'https://checkout.paystack.com/evt_access_code',
+          access_code: 'EVT_ACCESS_CODE',
+          reference: 'WW-EVT-xyz789'
+        }
+      })
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const db = createMockD1WithRegistration(
+      [],
+      [{ id: 'reg_1', tenantId: 'tenant_1', eventId: 'evt_1', status: 'PENDING', amountPaidKobo: 5000000, attendeeEmail: 'attendee@test.com', ticketRef: 'WW-EVT-001', title: '', version: 1, startDate: 0, endDate: 0, ticketPriceKobo: 0, capacity: null }]
+    );
+    const res = await makePayRequest('evt_1', 'reg_1', 'TENANT_ADMIN', db, 'sk_test_paystack');
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { success: boolean; data: { authorizationUrl: string; registrationId: string; amountKobo: number } };
+    expect(body.success).toBe(true);
+    expect(body.data.authorizationUrl).toContain('paystack.com');
+    expect(body.data.registrationId).toBe('reg_1');
+    expect(body.data.amountKobo).toBe(5000000);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('returns 402 when Paystack initialization fails', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({ status: false, message: 'Invalid key' })
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const db = createMockD1WithRegistration(
+      [],
+      [{ id: 'reg_1', tenantId: 'tenant_1', eventId: 'evt_1', status: 'PENDING', amountPaidKobo: 5000000, attendeeEmail: 'attendee@test.com', ticketRef: 'WW-EVT-001', title: '', version: 1, startDate: 0, endDate: 0, ticketPriceKobo: 0, capacity: null }]
+    );
+    const res = await makePayRequest('evt_1', 'reg_1', 'TENANT_ADMIN', db, 'sk_test_paystack');
+
+    expect(res.status).toBe(402);
+    vi.unstubAllGlobals();
+  });
+
+  it('requires authentication — returns 401 with no token', async () => {
+    const res = await app.request('/api/events/evt_1/registrations/reg_1/pay', {
+      method: 'POST'
+    }, {
+      DB: createMockD1(),
+      JWT_SECRET,
+      DOCUMENTS: {}, TENANT_CONFIG: {}, EVENTS: {}
+    } as unknown as Record<string, unknown>);
+    expect(res.status).toBe(401);
+  });
+});
+
+// ── POST /webhooks/events/paystack ────────────────────────────────────────────
+
+describe('POST /webhooks/events/paystack', () => {
+  const EVENTS_PAYSTACK_SECRET = 'sk_test_events_paystack_webhook_secret';
+
+  it('returns 500 when PAYSTACK_SECRET_KEY is not configured', async () => {
+    const rawBody = JSON.stringify({ event: 'charge.success', data: { reference: 'ref1', metadata: {} } });
+    const res = await app.request('/webhooks/events/paystack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-paystack-signature': 'anysig' },
+      body: rawBody
+    }, {
+      DB: createMockD1(),
+      JWT_SECRET,
+      DOCUMENTS: {}, TENANT_CONFIG: {}, EVENTS: {}
+    } as unknown as Record<string, unknown>);
+    expect(res.status).toBe(500);
+  });
+
+  it('returns 401 for an invalid webhook signature', async () => {
+    const rawBody = JSON.stringify({ event: 'charge.success', data: { reference: 'ref1', metadata: {} } });
+    const res = await app.request('/webhooks/events/paystack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-paystack-signature': 'bad_signature' },
+      body: rawBody
+    }, {
+      DB: createMockD1(),
+      JWT_SECRET,
+      PAYSTACK_SECRET_KEY: EVENTS_PAYSTACK_SECRET,
+      DOCUMENTS: {}, TENANT_CONFIG: {}, EVENTS: {}
+    } as unknown as Record<string, unknown>);
+    expect(res.status).toBe(401);
+    const body = await res.json() as { success: boolean; errors: string[] };
+    expect(body.errors[0]).toContain('signature');
+  });
+
+  it('returns 200 with received:true for charge.success with valid signature', async () => {
+    const webhookData = {
+      event: 'charge.success',
+      data: {
+        id: 1,
+        status: 'success',
+        reference: 'ref_evt_001',
+        amount: 5000000,
+        currency: 'NGN',
+        paid_at: new Date().toISOString(),
+        customer: { email: 'attendee@test.com' },
+        metadata: { registrationId: 'reg_1', eventId: 'evt_1', tenantId: 'tenant_1' }
+      }
+    };
+    const rawBody = JSON.stringify(webhookData);
+    const signature = await makeEventsPaystackSignature(rawBody, EVENTS_PAYSTACK_SECRET);
+
+    const db = createMockD1WithRegistration(
+      [],
+      [{ id: 'reg_1', tenantId: 'tenant_1', eventId: 'evt_1', status: 'PENDING', amountPaidKobo: 5000000, attendeeEmail: 'attendee@test.com', ticketRef: 'WW-EVT-001', title: '', version: 1, startDate: 0, endDate: 0, ticketPriceKobo: 0, capacity: null }]
+    );
+
+    const res = await app.request('/webhooks/events/paystack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-paystack-signature': signature },
+      body: rawBody
+    }, {
+      DB: db,
+      JWT_SECRET,
+      PAYSTACK_SECRET_KEY: EVENTS_PAYSTACK_SECRET,
+      DOCUMENTS: {}, TENANT_CONFIG: {}, EVENTS: {}
+    } as unknown as Record<string, unknown>);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { success: boolean; data: { received: boolean } };
+    expect(body.success).toBe(true);
+    expect(body.data.received).toBe(true);
+  });
+
+  it('returns 200 for non-charge.success events (just acknowledges)', async () => {
+    const webhookData = { event: 'refund.processed', data: { reference: 'ref_xyz', metadata: null } };
+    const rawBody = JSON.stringify(webhookData);
+    const signature = await makeEventsPaystackSignature(rawBody, EVENTS_PAYSTACK_SECRET);
+
+    const res = await app.request('/webhooks/events/paystack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-paystack-signature': signature },
+      body: rawBody
+    }, {
+      DB: createMockD1(),
+      JWT_SECRET,
+      PAYSTACK_SECRET_KEY: EVENTS_PAYSTACK_SECRET,
+      DOCUMENTS: {}, TENANT_CONFIG: {}, EVENTS: {}
+    } as unknown as Record<string, unknown>);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { success: boolean; data: { received: boolean } };
+    expect(body.data.received).toBe(true);
+  });
+
+  it('does not require Authorization header (bypasses auth middleware)', async () => {
+    const webhookData = { event: 'charge.success', data: { reference: 'ref1', amount: 1000, metadata: null } };
+    const rawBody = JSON.stringify(webhookData);
+    const signature = await makeEventsPaystackSignature(rawBody, EVENTS_PAYSTACK_SECRET);
+
+    const res = await app.request('/webhooks/events/paystack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-paystack-signature': signature },
+      body: rawBody
+    }, {
+      DB: createMockD1(),
+      JWT_SECRET,
+      PAYSTACK_SECRET_KEY: EVENTS_PAYSTACK_SECRET,
+      DOCUMENTS: {}, TENANT_CONFIG: {}, EVENTS: {}
+    } as unknown as Record<string, unknown>);
+
+    expect(res.status).not.toBe(401);
+  });
+});
