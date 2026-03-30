@@ -19,7 +19,13 @@ import Dexie, { type Table } from 'dexie';
 export interface Mutation {
   id?: number;
   tenantId: string;
-  entityType: 'legal_client' | 'legal_case' | 'case_hearing' | 'legal_time_entry' | 'legal_invoice' | 'legal_document' | 'nba_profile';
+  /** All entity types across all WebWaka Professional modules */
+  entityType:
+    // Legal Practice module
+    | 'legal_client' | 'legal_case' | 'case_hearing'
+    | 'legal_time_entry' | 'legal_invoice' | 'legal_document' | 'nba_profile'
+    // Event Management module
+    | 'managed_event' | 'event_registration';
   entityId: string;
   action: 'CREATE' | 'UPDATE' | 'DELETE';
   payload: Record<string, unknown>;
@@ -59,6 +65,27 @@ export class LegalPracticeOfflineDB extends Dexie {
       invoices: 'id, tenantId, caseId, clientId, status, deletedAt',
       documents: 'id, tenantId, caseId, deletedAt',
       nbaProfiles: 'id, tenantId, userId, barNumber, deletedAt'
+    });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OFFLINE DATABASE — Event Management Module
+// Blueprint Reference: Part 6 — "IndexedDB → Mutation Queue"
+// ─────────────────────────────────────────────────────────────────────────────
+
+export class EventManagementOfflineDB extends Dexie {
+  mutations!: Table<Mutation, number>;
+  managedEvents!: Table<Record<string, unknown>, string>;
+  eventRegistrations!: Table<Record<string, unknown>, string>;
+
+  constructor(tenantId: string) {
+    super(`WebWakaDB_professional_events_${tenantId}`);
+
+    this.version(1).stores({
+      mutations: '++id, tenantId, entityType, entityId, status, timestamp',
+      managedEvents: 'id, tenantId, status, startDate, deletedAt',
+      eventRegistrations: 'id, tenantId, eventId, status, ticketRef, deletedAt'
     });
   }
 }

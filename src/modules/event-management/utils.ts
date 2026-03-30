@@ -4,17 +4,24 @@
  * Blueprint Reference: Part 9.2 — Monetary Values as integers (kobo)
  *
  * Pure utility functions — no side effects, fully testable.
+ *
+ * ── Shared utilities are re-exported from core for backwards compatibility ──
+ * New code that needs these utilities should import from core directly:
+ *   import { generateId, nowUTC } from '../../core/ids';
+ *   import { koboToNaira, formatCurrency } from '../../core/money';
+ *   import { validateNigerianPhone } from '../../core/validators';
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ID GENERATION
+// RE-EXPORTS FROM CORE — Backwards-compatible; tests import from './utils'
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function generateId(prefix: string): string {
-  const timestamp = Date.now().toString(36);
-  const random = Math.random().toString(36).substring(2, 9);
-  return `${prefix}_${timestamp}_${random}`;
-}
+export { generateId, nowUTC } from '../../core/ids';
+export { koboToNaira, nairaToKobo, formatCurrency, SUPPORTED_CURRENCIES } from '../../core/money';
+export type { CurrencyConfig } from '../../core/money';
+export { formatWATDate, formatWATDateTime } from '../../core/time';
+export { validateNigerianPhone, validateEmail } from '../../core/validators';
+export type { ValidationResult } from '../../core/validators';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TICKET REFERENCE GENERATION
@@ -22,7 +29,7 @@ export function generateId(prefix: string): string {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Generate a human-readable ticket reference
+ * Generate a human-readable ticket reference.
  * Format: WW-EVT-{YEAR}-{SEQUENCE_6_DIGITS}
  * Example: WW-EVT-2026-000001
  */
@@ -33,110 +40,12 @@ export function generateTicketRef(sequence: number): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MONETARY UTILITIES
-// Blueprint Reference: Part 9.2 — Monetary values as integers (kobo)
+// EVENT-SPECIFIC DATE VALIDATION
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Convert kobo (integer) to formatted Naira string */
-export function koboToNaira(kobo: number): string {
-  const naira = kobo / 100;
-  return new Intl.NumberFormat('en-NG', {
-    style: 'currency',
-    currency: 'NGN',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2
-  }).format(naira);
-}
+import type { ValidationResult } from '../../core/validators';
 
-/** Convert Naira (float) to kobo (integer, rounded) */
-export function nairaToKobo(naira: number): number {
-  return Math.round(naira * 100);
-}
-
-/**
- * Format a monetary amount for any supported African currency.
- * Amount is provided in the currency's smallest unit (kobo for NGN, pesewa for GHS, etc.)
- */
-export function formatCurrency(amount: number, currency: string): string {
-  const config = SUPPORTED_CURRENCIES[currency];
-  if (!config) {
-    return `${currency} ${(amount / 100).toFixed(2)}`;
-  }
-  const value = amount / 100;
-  return new Intl.NumberFormat(config.locale, {
-    style: 'currency',
-    currency,
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2
-  }).format(value);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SUPPORTED CURRENCIES
-// Blueprint Reference: Part 9.1 — Africa First
-// ─────────────────────────────────────────────────────────────────────────────
-
-export interface CurrencyConfig {
-  name: string;
-  symbol: string;
-  locale: string;
-}
-
-export const SUPPORTED_CURRENCIES: Record<string, CurrencyConfig> = {
-  NGN: { name: 'Nigerian Naira', symbol: '₦', locale: 'en-NG' },
-  GHS: { name: 'Ghanaian Cedi', symbol: 'GH₵', locale: 'en-GH' },
-  KES: { name: 'Kenyan Shilling', symbol: 'KSh', locale: 'en-KE' },
-  ZAR: { name: 'South African Rand', symbol: 'R', locale: 'en-ZA' },
-  UGX: { name: 'Ugandan Shilling', symbol: 'USh', locale: 'en-UG' },
-  TZS: { name: 'Tanzanian Shilling', symbol: 'TSh', locale: 'en-TZ' },
-  ETB: { name: 'Ethiopian Birr', symbol: 'Br', locale: 'am-ET' },
-  XOF: { name: 'West African CFA Franc', symbol: 'CFA', locale: 'fr-SN' },
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DATE UTILITIES
-// Blueprint Reference: Part 9.1 — Nigeria First (WAT = UTC+1)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Current time as UTC Unix timestamp (ms) */
-export function nowUTC(): number {
-  return Date.now();
-}
-
-/** Format a UTC timestamp as a human-readable WAT date string */
-export function formatWATDate(
-  utcMs: number,
-  options: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'short', day: 'numeric' }
-): string {
-  return new Intl.DateTimeFormat('en-NG', {
-    ...options,
-    timeZone: 'Africa/Lagos'
-  }).format(new Date(utcMs));
-}
-
-/** Format a UTC timestamp as a full WAT date-time string */
-export function formatWATDateTime(utcMs: number): string {
-  return new Intl.DateTimeFormat('en-NG', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: 'Africa/Lagos',
-    timeZoneName: 'short'
-  }).format(new Date(utcMs));
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// VALIDATION UTILITIES
-// ─────────────────────────────────────────────────────────────────────────────
-
-export interface ValidationResult {
-  valid: boolean;
-  error?: string;
-}
-
-/** Validate that startDate is before endDate */
+/** Validate that startDate is before endDate and not significantly in the past */
 export function validateEventDates(startDate: number, endDate: number): ValidationResult {
   if (startDate >= endDate) {
     return { valid: false, error: 'Event end date must be after start date' };
@@ -147,7 +56,7 @@ export function validateEventDates(startDate: number, endDate: number): Validati
   return { valid: true };
 }
 
-/** Validate that registration deadline is before event start */
+/** Validate that registration deadline is before event start date */
 export function validateRegistrationDeadline(
   registrationDeadline: number,
   startDate: number
@@ -158,7 +67,7 @@ export function validateRegistrationDeadline(
   return { valid: true };
 }
 
-/** Validate capacity is a positive integer or null */
+/** Validate capacity is a positive integer or null (null means unlimited) */
 export function validateCapacity(capacity: number | null): ValidationResult {
   if (capacity === null) return { valid: true };
   if (!Number.isInteger(capacity) || capacity < 1) {
@@ -167,32 +76,10 @@ export function validateCapacity(capacity: number | null): ValidationResult {
   return { valid: true };
 }
 
-/** Validate ticket price is a non-negative integer (kobo) */
+/** Validate ticket price is a non-negative integer in kobo */
 export function validateTicketPrice(kobo: number): ValidationResult {
   if (!Number.isInteger(kobo) || kobo < 0) {
     return { valid: false, error: 'Ticket price must be a non-negative integer in kobo' };
-  }
-  return { valid: true };
-}
-
-/** Validate a Nigerian phone number */
-export function validateNigerianPhone(phone: string): ValidationResult {
-  const cleaned = phone.replace(/\s/g, '');
-  const phoneRegex = /^(\+234|234|0)[789][01]\d{8}$/;
-  if (!phoneRegex.test(cleaned)) {
-    return {
-      valid: false,
-      error: 'Invalid Nigerian phone number. Expected format: +2348012345678 or 08012345678'
-    };
-  }
-  return { valid: true };
-}
-
-/** Validate an email address */
-export function validateEmail(email: string): ValidationResult {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(email)) {
-    return { valid: false, error: 'Invalid email address' };
   }
   return { valid: true };
 }
@@ -203,7 +90,7 @@ export function validateEmail(email: string): ValidationResult {
 
 import type { EventStatus } from '../../core/db/schema';
 
-/** Valid status transitions for events */
+/** Valid status transitions for managed events */
 const ALLOWED_STATUS_TRANSITIONS: Record<EventStatus, EventStatus[]> = {
   DRAFT: ['PUBLISHED', 'CANCELLED'],
   PUBLISHED: ['REGISTRATION_OPEN', 'CANCELLED'],
@@ -214,11 +101,13 @@ const ALLOWED_STATUS_TRANSITIONS: Record<EventStatus, EventStatus[]> = {
   CANCELLED: []
 };
 
+/** Return true if the status transition from → to is a valid business-rule transition */
 export function isValidStatusTransition(from: EventStatus, to: EventStatus): boolean {
   const allowed = ALLOWED_STATUS_TRANSITIONS[from] ?? [];
   return allowed.includes(to);
 }
 
+/** Return all valid next statuses from a given current status */
 export function getAllowedTransitions(from: EventStatus): EventStatus[] {
   return ALLOWED_STATUS_TRANSITIONS[from] ?? [];
 }

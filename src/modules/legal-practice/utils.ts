@@ -4,22 +4,25 @@
  * Blueprint Reference: Part 9.2 — Monetary Values as integers (kobo)
  *
  * Pure utility functions — no side effects, fully testable.
+ *
+ * ── Shared utilities are re-exported from core for backwards compatibility ──
+ * New code that needs these utilities should import from core directly:
+ *   import { generateId, nowUTC } from '../../core/ids';
+ *   import { koboToNaira, calculateVAT } from '../../core/money';
+ *   import { formatWATDate } from '../../core/time';
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ID GENERATION
+// RE-EXPORTS FROM CORE — Backwards-compatible; tests import from './utils'
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Generate a unique ID for legal entities */
-export function generateId(prefix: string): string {
-  const timestamp = Date.now().toString(36);
-  const random = Math.random().toString(36).substring(2, 9);
-  return `${prefix}_${timestamp}_${random}`;
-}
+export { generateId, nowUTC } from '../../core/ids';
+export { koboToNaira, nairaToKobo, formatCurrency, SUPPORTED_CURRENCIES, calculateVAT } from '../../core/money';
+export { formatWATDate, formatWATDateTime } from '../../core/time';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CASE REFERENCE GENERATION
-// Blueprint Reference: Part 10.8 — "Case tracking"
+// Blueprint Reference: Part 10.8 — "Case tracking with Nigerian state codes"
 // ─────────────────────────────────────────────────────────────────────────────
 
 const NIGERIAN_STATE_CODES: Record<string, string> = {
@@ -63,7 +66,7 @@ const NIGERIAN_STATE_CODES: Record<string, string> = {
 };
 
 /**
- * Generate a human-readable case reference
+ * Generate a human-readable case reference.
  * Format: WW/{STATE_CODE}/{YEAR}/{SEQUENCE}
  * Example: WW/LAG/2026/001
  */
@@ -87,9 +90,9 @@ export function generateCaseReference(state: string, sequence: number): string {
  *
  * Rules:
  * - Must start with "NBA/"
- * - Branch code: 2-5 uppercase letters
+ * - Branch code: 2–5 uppercase letters
  * - Year: 4-digit year between 1963 (first lawyers called to bar) and current year
- * - Sequence: 4-6 digits
+ * - Sequence: 4–6 digits
  */
 export function validateNBABarNumber(barNumber: string): { valid: boolean; error?: string } {
   if (!barNumber || typeof barNumber !== 'string') {
@@ -121,8 +124,8 @@ export function validateNBABarNumber(barNumber: string): { valid: boolean; error
 }
 
 /**
- * Validate year of call to bar
- * Nigerian Bar Association was established in 1959; first lawyers called in 1963
+ * Validate year of call to the Nigerian Bar.
+ * Nigerian Bar Association was established in 1959; first lawyers called in 1963.
  */
 export function validateYearOfCall(year: number): { valid: boolean; error?: string } {
   const currentYear = new Date().getFullYear();
@@ -136,37 +139,16 @@ export function validateYearOfCall(year: number): { valid: boolean; error?: stri
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MONETARY UTILITIES
-// Blueprint Reference: Part 9.2 — "Monetary Values: All monetary fields must be stored as integers (kobo/cents)."
-// Blueprint Reference: Part 9.1 — "Nigeria First: NGN is the default currency."
+// LEGAL-SPECIFIC MONETARY UTILITIES
+// Blueprint Reference: Part 9.2 — "Monetary Values: All monetary fields stored as integers (kobo)."
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Convert kobo (integer) to Naira display string */
-export function koboToNaira(kobo: number): string {
-  const naira = kobo / 100;
-  return new Intl.NumberFormat('en-NG', {
-    style: 'currency',
-    currency: 'NGN',
-    minimumFractionDigits: 2
-  }).format(naira);
-}
-
-/** Convert Naira amount to kobo integer */
-export function nairaToKobo(naira: number): number {
-  return Math.round(naira * 100);
-}
-
-/** Calculate time entry amount in kobo */
+/** Calculate time entry amount in kobo from duration (minutes) and hourly rate (kobo/hr) */
 export function calculateTimeEntryAmount(durationMinutes: number, hourlyRateKobo: number): number {
   return Math.round((durationMinutes / 60) * hourlyRateKobo);
 }
 
-/** Calculate Nigerian VAT (7.5% standard rate) */
-export function calculateVAT(subtotalKobo: number): number {
-  return Math.round(subtotalKobo * 0.075);
-}
-
-/** Format duration in minutes to human-readable string */
+/** Format duration in minutes to human-readable string (e.g., "1h 30m") */
 export function formatDuration(minutes: number): string {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
@@ -179,7 +161,7 @@ export function formatDuration(minutes: number): string {
 // INVOICE NUMBER GENERATION
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Generate a human-readable invoice number */
+/** Generate a human-readable invoice number. Format: INV-{YEAR}-{SEQUENCE_3_DIGITS} */
 export function generateInvoiceNumber(sequence: number): string {
   const year = new Date().getFullYear();
   const seq = String(sequence).padStart(3, '0');
@@ -187,43 +169,14 @@ export function generateInvoiceNumber(sequence: number): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TIMEZONE UTILITIES
-// Blueprint Reference: Part 9.1 — "Nigeria First: WAT timezone used."
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Format a UTC timestamp for display in WAT (West Africa Time, UTC+1) */
-export function formatWATDate(utcTimestampMs: number, options?: Intl.DateTimeFormatOptions): string {
-  return new Intl.DateTimeFormat('en-NG', {
-    timeZone: 'Africa/Lagos',
-    ...options
-  }).format(new Date(utcTimestampMs));
-}
-
-/** Format a UTC timestamp as a full datetime in WAT */
-export function formatWATDateTime(utcTimestampMs: number): string {
-  return formatWATDate(utcTimestampMs, {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZoneName: 'short'
-  });
-}
-
-/** Get current time as UTC timestamp in milliseconds */
-export function nowUTC(): number {
-  return Date.now();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // NDPR COMPLIANCE
 // Blueprint Reference: Part 9.1 — "Nigeria First: NDPR compliance enforced."
+// Nigeria Data Protection Regulation (NDPR) 2019
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Generate NDPR consent text in the user's preferred language
- * Nigeria Data Protection Regulation (NDPR) 2019 compliance
+ * Generate NDPR consent text in the user's preferred Nigerian language.
+ * Supports English, Yoruba, Igbo, and Hausa — the 3 major languages plus English.
  */
 export function getNDPRConsentText(language: 'en' | 'yo' | 'ig' | 'ha'): string {
   const texts: Record<string, string> = {
@@ -232,35 +185,5 @@ export function getNDPRConsentText(language: 'en' | 'yo' | 'ig' | 'ha'): string 
     ig: 'Anọ m na-ekwe ka WebWaka nweta ma ọ bụ jiri data nkeonwe m mee ihe dị ka Iwu Nchedo Data nke Nigeria (NDPR) 2019 si dị. A ga-eji data m naanị maka njikwa ọrụ iwu, a gaghị ekekọrịta ya na ndị ọzọ na-enweghị ikike m.',
     ha: 'Ina yarda da WebWaka tattara da sarrafa bayanan sirrina bisa ga Dokar Kare Bayanai ta Najeriya (NDPR) 2019. Za a yi amfani da bayanan ne kawai don gudanar da shari\'a kuma ba za a raba su da wasu ba ba tare da izinina ba.'
   };
-  return texts[language] ?? texts['en'];
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MULTI-CURRENCY SUPPORT
-// Blueprint Reference: Part 9.1 — "Africa First: Multi-currency support required in all financial models."
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const SUPPORTED_CURRENCIES: Record<string, { name: string; symbol: string; locale: string }> = {
-  NGN: { name: 'Nigerian Naira', symbol: '₦', locale: 'en-NG' },
-  GHS: { name: 'Ghanaian Cedi', symbol: 'GH₵', locale: 'en-GH' },
-  KES: { name: 'Kenyan Shilling', symbol: 'KSh', locale: 'en-KE' },
-  ZAR: { name: 'South African Rand', symbol: 'R', locale: 'en-ZA' },
-  UGX: { name: 'Ugandan Shilling', symbol: 'USh', locale: 'en-UG' },
-  TZS: { name: 'Tanzanian Shilling', symbol: 'TSh', locale: 'en-TZ' },
-  ETB: { name: 'Ethiopian Birr', symbol: 'Br', locale: 'am-ET' },
-  XOF: { name: 'West African CFA Franc', symbol: 'CFA', locale: 'fr-SN' },
-  USD: { name: 'US Dollar', symbol: '$', locale: 'en-US' },
-  GBP: { name: 'British Pound', symbol: '£', locale: 'en-GB' }
-};
-
-/** Format an amount in the smallest unit (kobo/cents) to a display string */
-export function formatCurrency(amountSmallestUnit: number, currencyCode: string): string {
-  const currency = SUPPORTED_CURRENCIES[currencyCode];
-  if (!currency) return `${currencyCode} ${(amountSmallestUnit / 100).toFixed(2)}`;
-
-  return new Intl.NumberFormat(currency.locale, {
-    style: 'currency',
-    currency: currencyCode,
-    minimumFractionDigits: 2
-  }).format(amountSmallestUnit / 100);
+  return texts[language] ?? texts['en']!;
 }

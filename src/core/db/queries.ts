@@ -18,40 +18,12 @@ import type {
 } from './schema';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// D1 DATABASE BINDING TYPE
+// D1 DATABASE BINDING TYPES — Canonical definition lives in core/db/d1.ts
+// Re-exported here for backwards-compatible import paths.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export interface D1Database {
-  prepare(query: string): D1PreparedStatement;
-  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
-  exec(query: string): Promise<D1ExecResult>;
-}
-
-export interface D1PreparedStatement {
-  bind(...values: unknown[]): D1PreparedStatement;
-  first<T = unknown>(colName?: string): Promise<T | null>;
-  run<T = unknown>(): Promise<D1Result<T>>;
-  all<T = unknown>(): Promise<D1Result<T>>;
-}
-
-export interface D1Result<T = unknown> {
-  results: T[];
-  success: boolean;
-  meta: {
-    changed_db: boolean;
-    changes: number;
-    duration: number;
-    last_row_id: number;
-    rows_read: number;
-    rows_written: number;
-    size_after: number;
-  };
-}
-
-export interface D1ExecResult {
-  count: number;
-  duration: number;
-}
+import type { D1Database, D1PreparedStatement, D1Result, D1ExecResult } from './d1';
+export type { D1Database, D1PreparedStatement, D1Result, D1ExecResult };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LEGAL CLIENTS QUERIES

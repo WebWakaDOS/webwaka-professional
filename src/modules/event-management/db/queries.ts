@@ -11,20 +11,12 @@
 import type { ManagedEvent, EventRegistration } from '../../../core/db/schema';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// D1 TYPE SHIM (mirrors legal-practice pattern)
+// D1 DATABASE BINDING TYPES — Canonical definition in core/db/d1.ts
+// Re-exported here for backwards-compatible import by the event-management API.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export interface D1Database {
-  prepare(query: string): D1PreparedStatement;
-  exec(query: string): Promise<{ count: number; duration: number }>;
-}
-
-interface D1PreparedStatement {
-  bind(...values: unknown[]): D1PreparedStatement;
-  first<T = Record<string, unknown>>(): Promise<T | null>;
-  all<T = Record<string, unknown>>(): Promise<{ results: T[] }>;
-  run(): Promise<{ success: boolean; meta: Record<string, unknown> }>;
-}
+import type { D1Database } from '../../../core/db/d1';
+export type { D1Database };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MANAGED EVENTS QUERIES
