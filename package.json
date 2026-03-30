@@ -4,10 +4,12 @@
   "description": "WebWaka Professional Services Suite (Legal Practice, Accounting, Event Management)",
   "main": "index.js",
   "scripts": {
+    "dev": "vite",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "vite build",
+    "build:worker": "tsc -p tsconfig.build.json",
     "deploy": "wrangler deploy",
     "deploy:staging": "wrangler deploy --env staging",
     "deploy:production": "wrangler deploy --env production",
@@ -29,9 +31,11 @@
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
     "dexie": "^4.3.0",
     "hono": "^4.12.8",
     "typescript": "^5.9.3",
+    "vite": "^8.0.3",
     "vitest": "^4.1.0"
   },
   "dependencies": {
