@@ -17,6 +17,7 @@ import { Hono } from 'hono';
 import { createLogger } from '../../../core/logger';
 import { publishEvent, createEventMgmtEvent } from '../../../core/event-bus';
 import { PaystackClient, generatePaystackReference, type PaystackWebhookEvent } from '../../../core/payments/paystack';
+import { createNotificationService } from '../../../core/notifications/service';
 import {
   getEventsByTenant,
   getEventById,
@@ -72,6 +73,9 @@ export interface Env {
   EVENT_BUS_URL?: string;
   EVENT_BUS_API_KEY?: string;
   PAYSTACK_SECRET_KEY?: string;
+  TERMII_API_KEY?: string;
+  YOURNOTIFY_API_KEY?: string;
+  TERMII_SENDER_ID?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -853,6 +857,20 @@ app.post('/api/events/:eventId/registrations', async (c) => {
       { EVENT_BUS_URL: c.env.EVENT_BUS_URL, EVENT_BUS_API_KEY: c.env.EVENT_BUS_API_KEY }
     );
 
+    // Fire-and-forget notification for confirmed registrations (free events) — Part 9.1 Nigeria First
+    if (registration.status === 'CONFIRMED') {
+      const notifier = createNotificationService(c.env);
+      void notifier.notifyRegistrationConfirmed({
+        attendeeName: registration.attendeeName,
+        attendeePhone: registration.attendeePhone,
+        attendeeEmail: registration.attendeeEmail,
+        eventTitle: event.title,
+        ticketRef,
+        amountKobo: registration.amountPaidKobo,
+        currency: event.currency
+      }).catch(err => logger.error('Registration notification failed', { tenantId, error: String(err) }));
+    }
+
     logger.info('Registration created', { tenantId, eventId, registrationId: registration.id, ticketRef });
     return c.json<ApiResponse>(ok(registration), 201);
   } catch (error) {
@@ -1153,6 +1171,23 @@ app.post('/webhooks/events/paystack', async (c) => {
           { EVENT_BUS_URL: c.env.EVENT_BUS_URL, EVENT_BUS_API_KEY: c.env.EVENT_BUS_API_KEY }
         );
         logger.info('Registration confirmed via Paystack webhook', { tenantId, registrationId, reference });
+
+        // Fire-and-forget notification — Part 9.1 Nigeria First
+        const reg = await getRegistrationById(c.env.DB, tenantId, registrationId).catch(() => null);
+        const evt = reg ? await getEventById(c.env.DB, tenantId, reg.eventId).catch(() => null) : null;
+        if (reg?.attendeePhone && evt) {
+          const notifier = createNotificationService(c.env);
+          void notifier.notifyPaymentConfirmed({
+            attendeeName: reg.attendeeName,
+            attendeePhone: reg.attendeePhone,
+            attendeeEmail: reg.attendeeEmail,
+            eventTitle: evt.title,
+            ticketRef: reg.ticketRef,
+            amountKobo: reg.amountPaidKobo,
+            currency: evt.currency,
+            paymentReference: reference
+          }).catch(err => logger.error('Webhook payment notification failed', { tenantId, error: String(err) }));
+        }
       }
     }
 

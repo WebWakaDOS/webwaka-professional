@@ -41,6 +41,7 @@ export type EventMgmtEventType =
   | 'event_mgmt.event.banner_uploaded'
   | 'event_mgmt.registration.created'
   | 'event_mgmt.registration.confirmed'
+  | 'event_mgmt.registration.payment_confirmed'
   | 'event_mgmt.registration.cancelled'
   | 'event_mgmt.registration.checked_in';
 

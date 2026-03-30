@@ -34,19 +34,24 @@ src/
       d1.ts                     # Canonical D1Database / D1PreparedStatement / D1Result types
       schema.ts                 # All entity types + D1 migration SQL
       queries.ts                # Legal Practice D1 query helpers (re-exports D1 types from d1.ts)
-    event-bus/index.ts          # PlatformEvent bus — LegalEventType, EventMgmtEventType
+    event-bus/index.ts          # PlatformEvent bus — LegalEventType, EventMgmtEventType (incl. payment_confirmed)
     logger/                     # Structured logging
+    notifications/
+      termii.ts                 # TermiiClient (sendSMS) + normalizeNigerianPhone() — Nigeria First SMS
+      yournotify.ts             # YourNotifyClient (sendEmail) — Africa First email
+      templates.ts              # SMS + email templates for Legal and Event Management events
+      service.ts                # NotificationService + createNotificationService() factory
     payments/
       paystack.ts               # PaystackClient: initializeTransaction, verifyTransaction, verifyWebhookSignature
     sync/
       client.ts                 # LegalPracticeOfflineDB + EventManagementOfflineDB + SyncManager
   modules/
     legal-practice/             # Client mgmt, case tracking, hearings, billing, NBA compliance
-      api/index.ts              # Hono API (routes at /api/legal/*)
+      api/index.ts              # Hono API (routes at /api/legal/*) — notifies on invoice.paid
       db/queries.ts             # D1 queries (re-exports D1Database from core)
       utils.ts                  # Module utils (re-exports shared from core; keeps module-specific)
     event-management/
-      api/index.ts              # Hono API (routes at /api/events/*)
+      api/index.ts              # Hono API (routes at /api/events/*) — notifies on registration + payment
       db/queries.ts             # D1 queries (imports D1Database from core/db/d1)
       utils.ts                  # Module utils (re-exports shared from core; keeps module-specific)
 public/                         # Static assets, PWA manifest, service worker
@@ -81,9 +86,10 @@ All amounts in the **smallest currency unit** (kobo for NGN = 1/100 Naira). Alwa
 
 ## Test Suite
 
-- **281 tests total — 0 failures**
+- **323 tests total — 0 failures**
 - Legal Practice: 109 tests (utils, DB, API, sync, i18n, payment routes, webhook)
 - Event Management: 172 tests (utils, event bus, RBAC, API, DB, payment routes, webhook)
+- Notifications: 42 tests (Termii, YourNotify, templates, NotificationService, factory)
 - Run: `npm test`
 
 ## Development
@@ -125,4 +131,13 @@ See `.env.example` for required variables. Cloudflare bindings (D1, R2, KV) are 
 | 1.6 | `POST /webhooks/events/paystack` — registration payment webhook (HMAC-SHA512) | ✅ Complete |
 | 1.7 | Worker routing for `/webhooks/legal/*` and `/webhooks/events/*` | ✅ Complete |
 | 1.8 | Payment tests — 34 new tests; 281 total passing | ✅ Complete |
-| 2–8 | Notifications, documents, client portals, analytics, new modules | Pending |
+| 2.1 | `core/notifications/termii.ts` — TermiiClient + normalizeNigerianPhone() | ✅ Complete |
+| 2.2 | `core/notifications/yournotify.ts` — YourNotifyClient | ✅ Complete |
+| 2.3 | `core/notifications/templates.ts` — SMS + email templates (Legal + Events) | ✅ Complete |
+| 2.4 | `core/notifications/service.ts` — NotificationService + createNotificationService() | ✅ Complete |
+| 2.5 | EventMgmtEventType union: `event_mgmt.registration.payment_confirmed` added | ✅ Complete |
+| 2.6 | `TERMII_SENDER_ID` added to both module Env interfaces + worker.ts | ✅ Complete |
+| 2.7 | Legal API: fire-and-forget SMS/email on invoice.paid (mark-paid + Paystack webhook) | ✅ Complete |
+| 2.8 | Events API: fire-and-forget SMS/email on registration.confirmed + payment_confirmed | ✅ Complete |
+| 2.9 | Notification tests — 42 new tests; 323 total passing | ✅ Complete |
+| 3–8 | Documents, client portals, analytics, new modules (Healthcare, Accounting, HR) | Pending |

@@ -38,6 +38,7 @@ export interface Env {
   PAYSTACK_SECRET_KEY?: string;
   TERMII_API_KEY?: string;
   YOURNOTIFY_API_KEY?: string;
+  TERMII_SENDER_ID?: string;
 }
 
 export default {

@@ -12,6 +12,7 @@ import { Hono } from 'hono';
 import { createLogger } from '../../../core/logger';
 import { publishEvent, createEvent } from '../../../core/event-bus';
 import { PaystackClient, generatePaystackReference, type PaystackWebhookEvent } from '../../../core/payments/paystack';
+import { createNotificationService } from '../../../core/notifications/service';
 import {
   getClientsByTenant,
   getClientById,
@@ -78,6 +79,9 @@ export interface Env {
   EVENT_BUS_URL?: string;
   EVENT_BUS_API_KEY?: string;
   PAYSTACK_SECRET_KEY?: string;
+  TERMII_API_KEY?: string;
+  YOURNOTIFY_API_KEY?: string;
+  TERMII_SENDER_ID?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -751,6 +755,23 @@ app.post('/api/legal/invoices/:id/mark-paid', async (c) => {
       { EVENT_BUS_URL: c.env.EVENT_BUS_URL, EVENT_BUS_API_KEY: c.env.EVENT_BUS_API_KEY }
     );
 
+    // Fire-and-forget notification — Part 9.1 Nigeria First (Termii SMS)
+    if (invoice) {
+      const client = await getClientById(c.env.DB, tenantId, invoice.clientId).catch(() => null);
+      if (client?.phone) {
+        const notifier = createNotificationService(c.env);
+        void notifier.notifyInvoicePaid({
+          clientName: client.fullName,
+          clientPhone: client.phone,
+          clientEmail: client.email ?? undefined,
+          invoiceNumber: invoice.invoiceNumber,
+          totalKobo: invoice.totalKobo,
+          currency: invoice.currency,
+          paymentReference
+        }).catch(err => logger.error('Invoice paid notification failed', { tenantId, error: String(err) }));
+      }
+    }
+
     logger.info('Invoice marked paid', { tenantId, invoiceId: id, paymentReference });
     return c.json<ApiResponse>(ok({ id, status: 'PAID', paymentReference }));
   } catch (error) {
@@ -1045,6 +1066,21 @@ app.post('/webhooks/legal/paystack', async (c) => {
           { EVENT_BUS_URL: c.env.EVENT_BUS_URL, EVENT_BUS_API_KEY: c.env.EVENT_BUS_API_KEY }
         );
         logger.info('Invoice paid via Paystack webhook', { tenantId, invoiceId, reference });
+
+        // Fire-and-forget notification — Part 9.1 Nigeria First
+        const client = await getClientById(c.env.DB, tenantId, invoice?.clientId ?? '').catch(() => null);
+        if (client?.phone) {
+          const notifier = createNotificationService(c.env);
+          void notifier.notifyInvoicePaid({
+            clientName: client.fullName,
+            clientPhone: client.phone,
+            clientEmail: client.email ?? undefined,
+            invoiceNumber: invoice?.invoiceNumber ?? invoiceId,
+            totalKobo: invoice?.totalKobo ?? 0,
+            currency: invoice?.currency ?? 'NGN',
+            paymentReference: reference
+          }).catch(err => logger.error('Webhook invoice notification failed', { tenantId, error: String(err) }));
+        }
       }
     }
 
