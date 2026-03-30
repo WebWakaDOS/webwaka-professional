@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "IgPtuRBe4rDyRxPZHof4O"
+uri = "file://WEBWAKA-PRO-RESEARCH-REPORT.md"
+type = "text"
+title = "WebWaka Professional — Research Report & Implementation Plan"
