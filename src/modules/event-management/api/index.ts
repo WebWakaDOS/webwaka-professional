@@ -14,6 +14,7 @@
  */
 
 import { Hono } from 'hono';
+import { professionalAuthMiddleware, requireProfessionalRole } from '../../../core/auth-middleware';
 import { createLogger } from '../../../core/logger';
 import { publishEvent, createEventMgmtEvent } from '../../../core/event-bus';
 import { PaystackClient, generatePaystackReference, type PaystackWebhookEvent } from '../../../core/payments/paystack';
@@ -98,88 +99,11 @@ function fail(errors: string[]): ApiResponse {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// JWT VALIDATION — Edge-based
+// JWT VALIDATION — Delegated to @webwaka/core (canonical)
+// Custom validateJWT removed. jwtAuthMiddleware from @webwaka/core is used below.
+// Security hardened: 2026-04-01 — Remediation Issue #3
 // Blueprint Reference: Part 9.2 — "Edge-based JWT validation"
 // ─────────────────────────────────────────────────────────────────────────────
-
-interface JWTPayload {
-  sub: string;
-  tenantId: string;
-  role: EventManagementRole;
-  exp: number;
-}
-
-async function validateJWT(token: string, secret: string): Promise<JWTPayload | null> {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-
-    const [headerB64, payloadB64, signatureB64] = parts;
-    if (!headerB64 || !payloadB64 || !signatureB64) return null;
-
-    const encoder = new TextEncoder();
-    const keyData = encoder.encode(secret);
-    const key = await crypto.subtle.importKey(
-      'raw',
-      keyData,
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['verify']
-    );
-
-    const data = encoder.encode(`${headerB64}.${payloadB64}`);
-    const signature = Uint8Array.from(
-      atob(signatureB64.replace(/-/g, '+').replace(/_/g, '/')),
-      c => c.charCodeAt(0)
-    );
-    const valid = await crypto.subtle.verify('HMAC', key, signature, data);
-    if (!valid) return null;
-
-    const payload = JSON.parse(atob(payloadB64)) as JWTPayload;
-    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
-
-    return payload;
-  } catch {
-    return null;
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// RBAC HELPERS
-// Blueprint Reference: Part 9.2 — "RBAC on all restricted endpoints"
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Returns true when the given role is allowed to manage events
- * (create, edit, update status, upload banners, delete).
- * TENANT_ADMIN has unrestricted access. EVENT_MANAGER has operational access.
- */
-function canManageEvents(role: EventManagementRole): boolean {
-  return role === 'TENANT_ADMIN' || role === 'EVENT_MANAGER';
-}
-
-/**
- * Returns true when the given role is allowed to delete events or cancel events
- * and perform other destructive operations.
- * Restricted to TENANT_ADMIN only.
- */
-function isTenantAdmin(role: EventManagementRole): boolean {
-  return role === 'TENANT_ADMIN';
-}
-
-/**
- * Returns true when the given role can register attendees or manage registrations.
- * TENANT_ADMIN and EVENT_MANAGER can manage any registration.
- * ATTENDEE can create their own registration.
- */
-function canRegister(role: EventManagementRole): boolean {
-  return role === 'TENANT_ADMIN' || role === 'EVENT_MANAGER' || role === 'ATTENDEE';
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// HONO APP
-// ─────────────────────────────────────────────────────────────────────────────
-
 const app = new Hono<{ Bindings: Env }>();
 const logger = createLogger('event-management-api');
 
@@ -234,25 +158,7 @@ app.use('*', async (c, next) => {
 // All /api/* routes require a valid JWT
 // ─────────────────────────────────────────────────────────────────────────────
 
-app.use('/api/*', async (c, next): Promise<Response | void> => {
-  const authHeader = c.req.header('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return c.json<ApiResponse>(fail(['Missing or invalid Authorization header']), 401);
-  }
-
-  const token = authHeader.slice(7);
-  const payload = await validateJWT(token, c.env.JWT_SECRET);
-
-  if (!payload) {
-    return c.json<ApiResponse>(fail(['Invalid or expired token']), 401);
-  }
-
-  c.set('userId' as never, payload.sub);
-  c.set('tenantId' as never, payload.tenantId);
-  c.set('role' as never, payload.role);
-
-  await next();
-});
+app.use('/api/*', professionalAuthMiddleware);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HEALTH CHECK
