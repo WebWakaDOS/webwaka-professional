@@ -1,6 +1,7 @@
 name = "webwaka-professional-api"
 main = "src/worker.ts"
-compatibility_date = "2024-03-14"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
 
 # Staging Environment
 [env.staging]
@@ -18,8 +19,8 @@ kv_namespaces = [
 ]
 [[env.staging.d1_databases]]
 binding = "DB"
-database_name = "webwaka-professional-db-staging"
-database_id = "66c38966-6906-46df-b106-be19b54c4c13"
+database_name = "modules_prod"
+database_id = "ee93377c-8000-45d6-ae54-f0d4c588bf04"
 
 [[env.staging.r2_buckets]]
 binding = "DOCUMENTS"
@@ -41,8 +42,8 @@ kv_namespaces = [
 ]
 [[env.production.d1_databases]]
 binding = "DB"
-database_name = "webwaka-professional-db-prod"
-database_id = "acfdfc4d-e63a-4482-977a-82376b68f578"
+database_name = "modules_prod"
+database_id = "ee93377c-8000-45d6-ae54-f0d4c588bf04"
 
 [[env.production.r2_buckets]]
 binding = "DOCUMENTS"

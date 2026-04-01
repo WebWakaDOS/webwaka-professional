@@ -117,7 +117,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: d1 migrations apply webwaka-professional-db-staging --env staging --remote
+          command: d1 migrations apply modules_prod --env staging --remote
 
       - name: Deploy Workers to Staging
         uses: cloudflare/wrangler-action@v3
@@ -170,7 +170,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: d1 migrations apply webwaka-professional-db-prod --env production --remote
+          command: d1 migrations apply modules_prod --env production --remote
 
       - name: Deploy Workers to Production
         uses: cloudflare/wrangler-action@v3
