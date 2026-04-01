@@ -14,7 +14,7 @@ ENVIRONMENT = "staging"
 kv_namespaces = [
   { binding = "TENANT_CONFIG", id = "d870d125-0530-406d-8786-d04e07c5d0f5" },
   { binding = "EVENTS", id = "d870d125-0530-406d-8786-d04e07c5d0f5" },
-  { binding = "RATE_LIMIT_KV", id = "REPLACE_WITH_STAGING_RATE_LIMIT_KV_ID" }
+  { binding = "RATE_LIMIT_KV", id = "2207155d8f934f6aa3209ad09ca1ba68" }
 ]
 [[env.staging.d1_databases]]
 binding = "DB"
@@ -37,7 +37,7 @@ ENVIRONMENT = "production"
 kv_namespaces = [
   { binding = "TENANT_CONFIG", id = "d1d3b537-d0d5-40ea-8523-9d4727a00bc1" },
   { binding = "EVENTS", id = "d1d3b537-d0d5-40ea-8523-9d4727a00bc1" },
-  { binding = "RATE_LIMIT_KV", id = "REPLACE_WITH_PROD_RATE_LIMIT_KV_ID" }
+  { binding = "RATE_LIMIT_KV", id = "4c3ba07961354074854d0ade2e1cf85b" }
 ]
 [[env.production.d1_databases]]
 binding = "DB"
