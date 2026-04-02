@@ -479,7 +479,7 @@ describe('getSupportedLanguages', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { localEventBus, createEvent, publishEvent } from '../../core/event-bus';
-import type { PlatformEvent } from '../../core/event-bus';
+import type { WebWakaEvent } from '../../core/event-bus';
 
 describe('localEventBus', () => {
   beforeEach(() => {
@@ -487,7 +487,7 @@ describe('localEventBus', () => {
   });
 
   it('subscribes and receives events', async () => {
-    const received: PlatformEvent[] = [];
+    const received: WebWakaEvent[] = [];
     localEventBus.subscribe('legal.client.created', (event) => {
       received.push(event);
     });
@@ -496,7 +496,7 @@ describe('localEventBus', () => {
     await localEventBus.publish(event);
 
     expect(received).toHaveLength(1);
-    expect(received[0]?.type).toBe('legal.client.created');
+    expect(received[0]?.event).toBe('legal.client.created');
     expect(received[0]?.tenantId).toBe('tenant_1');
   });
 
@@ -514,7 +514,7 @@ describe('localEventBus', () => {
   });
 
   it('does not deliver to subscribers of a different event type', async () => {
-    const received: PlatformEvent[] = [];
+    const received: WebWakaEvent[] = [];
     localEventBus.subscribe('legal.invoice.paid', (event) => received.push(event));
 
     const event = createEvent('tenant_1', 'legal.client.created', { clientId: 'c1' });
@@ -524,7 +524,7 @@ describe('localEventBus', () => {
   });
 
   it('clearHandlers stops all future deliveries', async () => {
-    const received: PlatformEvent[] = [];
+    const received: WebWakaEvent[] = [];
     localEventBus.subscribe('legal.client.created', (event) => received.push(event));
     localEventBus.clearHandlers();
 
@@ -538,18 +538,18 @@ describe('localEventBus', () => {
 describe('createEvent', () => {
   it('creates an event with all required fields', () => {
     const event = createEvent('tenant_1', 'legal.client.created', { clientId: 'c1' });
-    expect(event.id).toBeDefined();
+    expect(event.payload.id).toBeDefined();
     expect(event.tenantId).toBe('tenant_1');
-    expect(event.type).toBe('legal.client.created');
-    expect(event.sourceModule).toBe('legal_practice');
+    expect(event.event).toBe('legal.client.created');
+    expect(event.payload.sourceModule).toBe('legal_practice');
     expect(typeof event.timestamp).toBe('number');
-    expect(event.payload).toEqual({ clientId: 'c1' });
+    expect(event.payload.clientId).toEqual('c1');
   });
 
   it('generates unique event IDs', () => {
     const ids = new Set(
       Array.from({ length: 50 }, () =>
-        createEvent('t1', 'legal.client.created', {}).id
+        createEvent('t1', 'legal.client.created', {}).payload.id
       )
     );
     expect(ids.size).toBe(50);
@@ -570,7 +570,7 @@ describe('publishEvent', () => {
   });
 
   it('publishes to local bus when no EVENT_BUS_URL configured', async () => {
-    const received: PlatformEvent[] = [];
+    const received: WebWakaEvent[] = [];
     localEventBus.subscribe('legal.invoice.paid', (e) => received.push(e));
 
     const event = createEvent('t1', 'legal.invoice.paid', { invoiceId: 'inv_1' });
@@ -580,7 +580,7 @@ describe('publishEvent', () => {
   });
 
   it('publishes to local bus AND calls remote fetch when EVENT_BUS_URL is configured', async () => {
-    const received: PlatformEvent[] = [];
+    const received: WebWakaEvent[] = [];
     localEventBus.subscribe('legal.case.status_changed', (e) => received.push(e));
 
     const mockFetch = vi.fn().mockResolvedValue({ ok: true });
@@ -596,7 +596,7 @@ describe('publishEvent', () => {
   });
 
   it('handles remote bus network error gracefully without throwing', async () => {
-    const received: PlatformEvent[] = [];
+    const received: WebWakaEvent[] = [];
     localEventBus.subscribe('legal.document.uploaded', (e) => received.push(e));
 
     const mockFetch = vi.fn().mockRejectedValue(new Error('Network error'));

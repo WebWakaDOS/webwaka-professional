@@ -450,17 +450,17 @@ describe('getAllowedTransitions', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { localEventBus, createEventMgmtEvent, publishEvent } from '../../core/event-bus';
-import type { PlatformEvent, EventMgmtEventType } from '../../core/event-bus';
+import type { WebWakaEvent, EventMgmtEventType } from '../../core/event-bus';
 
 describe('createEventMgmtEvent', () => {
   it('creates an event with all required fields', () => {
     const event = createEventMgmtEvent('tenant_1', 'event_mgmt.event.created', { eventId: 'evt_1' });
-    expect(event.id).toBeDefined();
+    expect(event.payload.id).toBeDefined();
     expect(event.tenantId).toBe('tenant_1');
-    expect(event.type).toBe('event_mgmt.event.created');
-    expect(event.sourceModule).toBe('event_management');
+    expect(event.event).toBe('event_mgmt.event.created');
+    expect(event.payload.sourceModule).toBe('event_management');
     expect(typeof event.timestamp).toBe('number');
-    expect(event.payload).toEqual({ eventId: 'evt_1' });
+    expect(event.payload.eventId).toEqual('evt_1');
   });
 
   it('sets timestamp close to current time', () => {
@@ -474,7 +474,7 @@ describe('createEventMgmtEvent', () => {
   it('generates unique event IDs across calls', () => {
     const ids = new Set(
       Array.from({ length: 50 }, () =>
-        createEventMgmtEvent('t1', 'event_mgmt.registration.created', {}).id
+        createEventMgmtEvent('t1', 'event_mgmt.registration.created', {}).payload.id
       )
     );
     expect(ids.size).toBe(50);
@@ -482,7 +482,7 @@ describe('createEventMgmtEvent', () => {
 
   it('correctly assigns event_management as sourceModule', () => {
     const event = createEventMgmtEvent('t1', 'event_mgmt.event.cancelled', {});
-    expect(event.sourceModule).toBe('event_management');
+    expect(event.payload.sourceModule).toBe('event_management');
   });
 });
 
@@ -492,30 +492,30 @@ describe('publishEvent — event_mgmt events via localEventBus', () => {
   });
 
   it('publishes event_mgmt events to local bus', async () => {
-    const received: PlatformEvent[] = [];
+    const received: WebWakaEvent[] = [];
     localEventBus.subscribe('event_mgmt.event.created', e => received.push(e));
 
     const event = createEventMgmtEvent('t1', 'event_mgmt.event.created', { eventId: 'evt_1' });
     await publishEvent(event, {});
 
     expect(received).toHaveLength(1);
-    expect(received[0]?.type).toBe('event_mgmt.event.created');
-    expect(received[0]?.sourceModule).toBe('event_management');
+    expect(received[0]?.event).toBe('event_mgmt.event.created');
+    expect(received[0]?.payload.sourceModule).toBe('event_management');
   });
 
   it('delivers registration events to subscribed handlers', async () => {
-    const received: PlatformEvent[] = [];
+    const received: WebWakaEvent[] = [];
     localEventBus.subscribe('event_mgmt.registration.confirmed', e => received.push(e));
 
     const event = createEventMgmtEvent('t1', 'event_mgmt.registration.confirmed', { registrationId: 'reg_1' });
     await publishEvent(event, {});
 
     expect(received).toHaveLength(1);
-    expect(received[0]?.payload).toEqual({ registrationId: 'reg_1' });
+    expect(received[0]?.payload.registrationId).toEqual('reg_1');
   });
 
   it('does not deliver to wrong event type', async () => {
-    const received: PlatformEvent[] = [];
+    const received: WebWakaEvent[] = [];
     localEventBus.subscribe('event_mgmt.event.cancelled', e => received.push(e));
 
     const event = createEventMgmtEvent('t1', 'event_mgmt.event.created', {});
@@ -525,7 +525,7 @@ describe('publishEvent — event_mgmt events via localEventBus', () => {
   });
 
   it('publishes to remote bus when EVENT_BUS_URL is set and handles failure gracefully', async () => {
-    const received: PlatformEvent[] = [];
+    const received: WebWakaEvent[] = [];
     localEventBus.subscribe('event_mgmt.event.published', e => received.push(e));
 
     const mockFetch = vi.fn().mockRejectedValue(new Error('Network error'));

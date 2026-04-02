@@ -6,6 +6,9 @@
  * Modules communicate via events, never via direct dependencies.
  * This module provides both a local in-process event bus (for testing/offline)
  * and a remote CORE-2 event bus publisher (for production).
+ *
+ * Schema: Unified WebWakaEvent<T> from @webwaka/core/events
+ * Ref: EVENT_BUS_SCHEMA.md — event, tenantId, payload, timestamp (number)
  */
 
 import { createLogger } from '../logger';
@@ -48,6 +51,32 @@ export type EventMgmtEventType =
 export type PlatformEventType = LegalEventType | EventMgmtEventType;
 export type PlatformSourceModule = 'legal_practice' | 'event_management';
 
+/**
+ * Unified WebWaka Platform Event Bus Schema (Governance-Mandated).
+ *
+ * Strictly conforms to the standard WebWakaEvent<T> shape:
+ *   event (string), tenantId (string), payload (T), timestamp (number)
+ *
+ * Legacy fields (id, sourceModule) are moved into the payload object
+ * to preserve domain context while conforming to the standard schema.
+ *
+ * Reference: EVENT_BUS_SCHEMA.md in webwaka-platform-docs
+ */
+export interface WebWakaEvent<T = Record<string, unknown>> {
+  /** The event type in dot-notation (e.g., 'legal.client.created') */
+  event: string;
+  /** The ID of the tenant emitting the event */
+  tenantId: string;
+  /** The event-specific payload (includes id, sourceModule, and domain fields) */
+  payload: T;
+  /** UTC Unix timestamp in milliseconds */
+  timestamp: number;
+}
+
+/**
+ * @deprecated Use WebWakaEvent<T> instead for governance compliance.
+ * Kept for backward compatibility only.
+ */
 export interface PlatformEvent<T = Record<string, unknown>> {
   /** Unique event ID */
   id: string;
@@ -67,19 +96,19 @@ export interface PlatformEvent<T = Record<string, unknown>> {
 // LOCAL EVENT BUS (in-process, used for testing and offline scenarios)
 // ─────────────────────────────────────────────────────────────────────────────
 
-type EventHandler<T = Record<string, unknown>> = (event: PlatformEvent<T>) => void | Promise<void>;
+type EventHandler<T = Record<string, unknown>> = (event: WebWakaEvent<T>) => void | Promise<void>;
 
 class LocalEventBus {
   private handlers: Map<string, EventHandler[]> = new Map();
 
-  subscribe<T = Record<string, unknown>>(eventType: PlatformEventType, handler: EventHandler<T>): void {
+  subscribe<T = Record<string, unknown>>(eventType: string, handler: EventHandler<T>): void {
     const existing = this.handlers.get(eventType) ?? [];
     this.handlers.set(eventType, [...existing, handler as EventHandler]);
   }
 
-  async publish<T = Record<string, unknown>>(event: PlatformEvent<T>): Promise<void> {
-    const handlers = this.handlers.get(event.type) ?? [];
-    await Promise.all(handlers.map(h => h(event as PlatformEvent)));
+  async publish<T = Record<string, unknown>>(event: WebWakaEvent<T>): Promise<void> {
+    const handlers = this.handlers.get(event.event) ?? [];
+    await Promise.all(handlers.map(h => h(event as WebWakaEvent)));
   }
 
   clearHandlers(): void {
@@ -100,7 +129,7 @@ export interface EventBusEnv {
 }
 
 export async function publishEvent<T = Record<string, unknown>>(
-  event: PlatformEvent<T>,
+  event: WebWakaEvent<T>,
   env: EventBusEnv
 ): Promise<void> {
   // Always publish to local bus (for in-process subscribers and testing)
@@ -109,7 +138,7 @@ export async function publishEvent<T = Record<string, unknown>>(
   // Publish to remote CORE-2 event bus if configured
   if (!env.EVENT_BUS_URL) {
     logger.warn('EVENT_BUS_URL not configured — event published locally only', {
-      eventType: event.type,
+      event: event.event,
       tenantId: event.tenantId
     });
     return;
@@ -128,20 +157,19 @@ export async function publishEvent<T = Record<string, unknown>>(
 
     if (!response.ok) {
       logger.error('Failed to publish event to CORE-2 event bus', {
-        eventType: event.type,
+        event: event.event,
         tenantId: event.tenantId,
         status: String(response.status)
       });
     } else {
       logger.info('Event published to CORE-2 event bus', {
-        eventType: event.type,
+        event: event.event,
         tenantId: event.tenantId,
-        eventId: event.id
       });
     }
   } catch (error) {
     logger.error('Network error publishing event to CORE-2 event bus', {
-      eventType: event.type,
+      event: event.event,
       tenantId: event.tenantId,
       error: error instanceof Error ? error.message : 'Unknown error'
     });
@@ -160,14 +188,12 @@ export function createEvent<T = Record<string, unknown>>(
   tenantId: string,
   type: LegalEventType,
   payload: T
-): PlatformEvent<T> {
+): WebWakaEvent<T & { id: string; sourceModule: PlatformSourceModule }> {
   return {
-    id: generateEventId(),
+    event: type,
     tenantId,
-    type,
-    sourceModule: 'legal_practice',
+    payload: { ...payload, id: generateEventId(), sourceModule: 'legal_practice' as PlatformSourceModule },
     timestamp: Date.now(),
-    payload
   };
 }
 
@@ -175,13 +201,11 @@ export function createEventMgmtEvent<T = Record<string, unknown>>(
   tenantId: string,
   type: EventMgmtEventType,
   payload: T
-): PlatformEvent<T> {
+): WebWakaEvent<T & { id: string; sourceModule: PlatformSourceModule }> {
   return {
-    id: generateEventId(),
+    event: type,
     tenantId,
-    type,
-    sourceModule: 'event_management',
+    payload: { ...payload, id: generateEventId(), sourceModule: 'event_management' as PlatformSourceModule },
     timestamp: Date.now(),
-    payload
   };
 }
