@@ -73,25 +73,6 @@ export interface WebWakaEvent<T = Record<string, unknown>> {
   timestamp: number;
 }
 
-/**
- * @deprecated Use WebWakaEvent<T> instead for governance compliance.
- * Kept for backward compatibility only.
- */
-export interface PlatformEvent<T = Record<string, unknown>> {
-  /** Unique event ID */
-  id: string;
-  /** Multi-tenancy invariant — Part 9.2 */
-  tenantId: string;
-  /** Event type following dot-notation convention */
-  type: PlatformEventType;
-  /** Source module identifier */
-  sourceModule: PlatformSourceModule;
-  /** UTC Unix timestamp (ms) */
-  timestamp: number;
-  /** Event payload */
-  payload: T;
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // LOCAL EVENT BUS (in-process, used for testing and offline scenarios)
 // ─────────────────────────────────────────────────────────────────────────────
