@@ -703,6 +703,28 @@ export async function countTrustTransactionsByAccount(
   return row?.count ?? 0;
 }
 
+/**
+ * Count ALL trust transactions for a tenant across ALL accounts.
+ *
+ * IMPORTANT: This is the correct function to use when generating a new
+ * trust transaction reference. The UNIQUE INDEX on trust_transactions is
+ * (tenantId, reference), meaning references must be unique ACROSS THE WHOLE
+ * TENANT — not just per-account. Using a per-account count would cause
+ * reference collisions when a firm has more than one trust account.
+ *
+ * Blueprint Reference: Part 9.2 — Append-Only / Immutable Records
+ */
+export async function countTrustTransactionsByTenant(
+  db: D1Database,
+  tenantId: string
+): Promise<number> {
+  const row = await db
+    .prepare(`SELECT COUNT(*) as count FROM trust_transactions WHERE tenantId = ?`)
+    .bind(tenantId)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DASHBOARD STATS QUERY
 // ─────────────────────────────────────────────────────────────────────────────

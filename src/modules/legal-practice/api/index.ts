@@ -49,6 +49,7 @@ import {
   getTrustTransactionsByAccount,
   getTrustAccountBalance,
   countTrustTransactionsByAccount,
+  countTrustTransactionsByTenant,
   type D1Database
 } from '../../../core/db/queries';
 import {
@@ -1083,9 +1084,10 @@ app.get('/api/legal/trust-accounts/:id', async (c) => {
 // CREATE trust account (admin only)
 app.post('/api/legal/trust-accounts', async (c) => {
   const tenantId = c.get('tenantId' as never) as string;
-  const role = c.get('role' as never) as string;
+  const role = (c.get('role' as never) as string | undefined) ?? '';
   const userId = c.get('userId' as never) as string;
 
+  // Fail-closed: undefined role must NOT pass the admin check
   if (role !== 'admin') {
     return c.json<ApiResponse>(fail(['Insufficient permissions — admin role required to create trust accounts']), 403);
   }
@@ -1133,9 +1135,10 @@ app.post('/api/legal/trust-accounts', async (c) => {
 // UPDATE trust account metadata (name, description, active status) — admin only
 app.patch('/api/legal/trust-accounts/:id', async (c) => {
   const tenantId = c.get('tenantId' as never) as string;
-  const role = c.get('role' as never) as string;
+  const role = (c.get('role' as never) as string | undefined) ?? '';
   const id = c.req.param('id');
 
+  // Fail-closed: undefined role must NOT pass the admin check
   if (role !== 'admin') {
     return c.json<ApiResponse>(fail(['Insufficient permissions — admin role required']), 403);
   }
@@ -1217,9 +1220,12 @@ app.post('/api/legal/trust-accounts/:id/transactions', async (c) => {
     const direction = TRUST_TRANSACTION_DIRECTION[body.transactionType];
     const now = nowUTC();
 
-    // Generate unique reference for this tenant
-    const txnCount = await countTrustTransactionsByAccount(c.env.DB, tenantId, accountId);
-    const reference = generateTrustTransactionRef(txnCount + 1);
+    // BUG-FIX: Reference must be unique across the ENTIRE tenant (not per-account).
+    // The UNIQUE INDEX idx_trust_txn_reference is on (tenantId, reference).
+    // Using countTrustTransactionsByAccount would produce collisions when a firm
+    // has multiple trust accounts (both at count=0 would generate TT-YYYY-0001).
+    const tenantTxnCount = await countTrustTransactionsByTenant(c.env.DB, tenantId);
+    const reference = generateTrustTransactionRef(tenantTxnCount + 1);
 
     const transaction: TrustTransaction = {
       id: generateId('ttx'),
@@ -1238,7 +1244,18 @@ app.post('/api/legal/trust-accounts/:id/transactions', async (c) => {
       createdAt: now
     };
 
-    await insertTrustTransaction(c.env.DB, transaction);
+    try {
+      await insertTrustTransaction(c.env.DB, transaction);
+    } catch (insertError) {
+      // Catch reference uniqueness conflicts (SQLITE_CONSTRAINT_UNIQUE).
+      // This can happen under concurrent writes — the unique index is the guard.
+      const msg = String(insertError);
+      if (msg.includes('UNIQUE') || msg.includes('unique')) {
+        logger.warn('Trust transaction reference conflict, possible concurrent write', { tenantId, accountId, reference });
+        return c.json<ApiResponse>(fail(['Reference conflict — please retry the transaction']), 409);
+      }
+      throw insertError;
+    }
 
     // Compute new balance for response
     const balance = await getTrustAccountBalance(c.env.DB, tenantId, accountId);

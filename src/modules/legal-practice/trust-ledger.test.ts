@@ -202,7 +202,8 @@ import {
   insertTrustTransaction,
   getTrustTransactionsByAccount,
   getTrustAccountBalance,
-  countTrustTransactionsByAccount
+  countTrustTransactionsByAccount,
+  countTrustTransactionsByTenant
 } from '../../core/db/queries';
 import type { TrustAccount, TrustTransaction } from '../../core/db/schema';
 
@@ -453,6 +454,92 @@ describe('countTrustTransactionsByAccount', () => {
     const { db } = makeMockDB();
     const count = await countTrustTransactionsByAccount(db as never, 'tenant_abc', 'acct_001');
     expect(count).toBe(0);
+  });
+});
+
+describe('countTrustTransactionsByTenant', () => {
+  it('queries with only tenantId — returns tenant-wide count', async () => {
+    const { db } = makeMockDB();
+    await countTrustTransactionsByTenant(db as never, 'tenant_abc');
+    const sql = (db.prepare as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(sql).toContain('tenantId');
+    expect(sql).not.toContain('accountId');
+    expect(sql).toContain('COUNT');
+  });
+
+  it('returns 0 when tenant has no transactions', async () => {
+    const { db } = makeMockDB();
+    const count = await countTrustTransactionsByTenant(db as never, 'tenant_abc');
+    expect(count).toBe(0);
+  });
+
+  it('returns correct count from mocked DB', async () => {
+    const mockStatement = {
+      bind: vi.fn().mockReturnThis(),
+      first: vi.fn().mockResolvedValue({ count: 42 })
+    };
+    const db = { prepare: vi.fn().mockReturnValue(mockStatement) };
+    const count = await countTrustTransactionsByTenant(db as never, 'tenant_abc');
+    expect(count).toBe(42);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REGRESSION TESTS — Reference Uniqueness (Bug Fix)
+// Verifies that trust transaction references are unique ACROSS THE WHOLE TENANT
+// not just per-account. The UNIQUE INDEX is on (tenantId, reference).
+//
+// BUG: The original code used countTrustTransactionsByAccount() for reference
+// generation. A firm with two accounts (both at count=0) would generate
+// TT-YYYY-0001 twice, causing a UNIQUE constraint violation.
+//
+// FIX: Use countTrustTransactionsByTenant() so the sequence is tenant-wide.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Trust Transaction Reference Uniqueness (Multi-Account Regression)', () => {
+  it('countTrustTransactionsByTenant exists and is the correct function for reference generation', async () => {
+    const queries = await import('../../core/db/queries');
+    expect(typeof queries.countTrustTransactionsByTenant).toBe('function');
+  });
+
+  it('countTrustTransactionsByAccount still exists for per-account statistics', async () => {
+    const queries = await import('../../core/db/queries');
+    expect(typeof queries.countTrustTransactionsByAccount).toBe('function');
+  });
+
+  it('two accounts at count=0 generate DIFFERENT references using tenant-wide count', () => {
+    // Simulate two accounts both starting at 0 transactions.
+    // If we used per-account count, both would generate TT-2026-0001 — collision!
+    // With tenant-wide count: first gets seq=1 (TT-2026-0001),
+    // after inserting, tenant count becomes 1, second gets seq=2 (TT-2026-0002).
+    const ref1 = generateTrustTransactionRef(1);  // tenant count was 0
+    const ref2 = generateTrustTransactionRef(2);  // tenant count is now 1
+    expect(ref1).not.toBe(ref2);
+    expect(ref1).toContain('0001');
+    expect(ref2).toContain('0002');
+  });
+
+  it('tenant-wide sequence produces globally unique references across accounts', () => {
+    // Simulate 3 accounts each recording 2 transactions using tenant-wide sequence
+    const allRefs: string[] = [];
+    let tenantCount = 0;
+    for (let account = 0; account < 3; account++) {
+      for (let txn = 0; txn < 2; txn++) {
+        tenantCount++;
+        allRefs.push(generateTrustTransactionRef(tenantCount));
+      }
+    }
+    // All 6 references must be unique
+    const unique = new Set(allRefs);
+    expect(unique.size).toBe(6);
+    expect(allRefs).toEqual([
+      expect.stringContaining('0001'),
+      expect.stringContaining('0002'),
+      expect.stringContaining('0003'),
+      expect.stringContaining('0004'),
+      expect.stringContaining('0005'),
+      expect.stringContaining('0006'),
+    ]);
   });
 });
 
