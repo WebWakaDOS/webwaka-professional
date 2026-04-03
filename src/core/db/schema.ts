@@ -315,6 +315,94 @@ export interface NBAProfile {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// NBA TRUST ACCOUNT LEDGER
+// Blueprint Reference: Part 10.8 — NBA Compliance
+// Blueprint Reference: Part 9.2 — Append-Only / Immutable Records
+// NBA Rule 23: Lawyers must maintain a separate client trust account.
+// Commingling of funds is a serious professional violation.
+//
+// INVARIANT: trust_transactions is APPEND-ONLY.
+// No UPDATE or DELETE operations are permitted on trust_transactions.
+// Balance is always derived from a running sum — never stored.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Transaction direction — used for running-sum balance calculation */
+export type TrustTransactionDirection = 'CREDIT' | 'DEBIT';
+
+/** Transaction types — determines direction automatically */
+export type TrustTransactionType =
+  | 'DEPOSIT'       // CREDIT: client funds received into trust
+  | 'DISBURSEMENT'  // DEBIT:  client funds paid out on client's behalf
+  | 'BANK_CHARGES'  // DEBIT:  bank fees deducted from trust account
+  | 'INTEREST'      // CREDIT: interest earned on trust funds
+  | 'TRANSFER_IN'   // CREDIT: funds transferred in from another trust account
+  | 'TRANSFER_OUT'; // DEBIT:  funds transferred out to another trust account
+
+/** Derive transaction direction from type — canonical mapping */
+export const TRUST_TRANSACTION_DIRECTION: Record<TrustTransactionType, TrustTransactionDirection> = {
+  DEPOSIT: 'CREDIT',
+  DISBURSEMENT: 'DEBIT',
+  BANK_CHARGES: 'DEBIT',
+  INTEREST: 'CREDIT',
+  TRANSFER_IN: 'CREDIT',
+  TRANSFER_OUT: 'DEBIT'
+};
+
+export interface TrustAccount {
+  /** Surrogate primary key — UUID generated at application layer */
+  id: string;
+  /** Multi-tenancy invariant — Part 9.2 */
+  tenantId: string;
+  /** Human-readable name (e.g., "Commercial Litigation Trust Account") */
+  accountName: string;
+  /** Bank name (e.g., "First Bank Nigeria") */
+  bankName: string;
+  /** Bank account number */
+  accountNumber: string;
+  /** Optional description / purpose notes */
+  description: string | null;
+  /** Whether this account is active — use false to close (no hard delete) */
+  isActive: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TrustTransaction {
+  /** Surrogate primary key — UUID generated at application layer */
+  id: string;
+  /** Multi-tenancy invariant — Part 9.2 */
+  tenantId: string;
+  /** FK to trust_accounts */
+  accountId: string;
+  /** Type of transaction — determines direction (CREDIT or DEBIT) */
+  transactionType: TrustTransactionType;
+  /** Direction derived from transactionType — stored for query efficiency */
+  direction: TrustTransactionDirection;
+  /** Transaction amount in kobo — ALWAYS positive — Part 9.2 Monetary Values */
+  amountKobo: number;
+  /** Human-readable description of this transaction */
+  description: string;
+  /** FK to legal_clients (null for bank charges / interest) */
+  clientId: string | null;
+  /** FK to legal_cases (null for account-level transactions) */
+  caseId: string | null;
+  /** Human-readable reference (e.g., TT-2026-001) */
+  reference: string;
+  /** External bank / Paystack reference number */
+  externalReference: string | null;
+  /** User ID of the attorney/admin who recorded this transaction */
+  recordedBy: string;
+  /** Date the transaction occurred (may differ from createdAt) — UTC Unix ms */
+  transactionDate: number;
+  /**
+   * IMMUTABILITY INVARIANT: createdAt is set once at INSERT.
+   * There is NO updatedAt, NO deletedAt — this record can NEVER be modified.
+   * NBA Rule 23 requires a complete, unaltered audit trail.
+   */
+  createdAt: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // EVENT MANAGEMENT MODULE
 // Blueprint Reference: Part 9.2 — Multi-Tenant, Event-Driven
 // Blueprint Reference: Part 9.1 — Nigeria First, Offline First
@@ -658,4 +746,51 @@ CREATE INDEX IF NOT EXISTS idx_event_registrations_tenant ON event_registrations
 CREATE INDEX IF NOT EXISTS idx_event_registrations_attendee ON event_registrations(tenantId, attendeeId);
 CREATE INDEX IF NOT EXISTS idx_event_registrations_status ON event_registrations(tenantId, status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_event_registrations_ticket ON event_registrations(ticketRef);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- NBA TRUST ACCOUNT LEDGER (Migration 0002)
+-- Blueprint Reference: Part 10.8 — NBA Compliance (Rule 23)
+-- INVARIANT: trust_transactions is APPEND-ONLY. No UPDATE or DELETE.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS trust_accounts (
+  id TEXT PRIMARY KEY,
+  tenantId TEXT NOT NULL,
+  accountName TEXT NOT NULL,
+  bankName TEXT NOT NULL,
+  accountNumber TEXT NOT NULL,
+  description TEXT,
+  isActive INTEGER NOT NULL DEFAULT 1 CHECK (isActive IN (0, 1)),
+  createdAt INTEGER NOT NULL,
+  updatedAt INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_trust_accounts_tenant ON trust_accounts(tenantId);
+CREATE INDEX IF NOT EXISTS idx_trust_accounts_active ON trust_accounts(tenantId, isActive);
+
+CREATE TABLE IF NOT EXISTS trust_transactions (
+  id TEXT PRIMARY KEY,
+  tenantId TEXT NOT NULL,
+  accountId TEXT NOT NULL REFERENCES trust_accounts(id),
+  transactionType TEXT NOT NULL CHECK (transactionType IN (
+    'DEPOSIT', 'DISBURSEMENT', 'BANK_CHARGES', 'INTEREST', 'TRANSFER_IN', 'TRANSFER_OUT'
+  )),
+  direction TEXT NOT NULL CHECK (direction IN ('CREDIT', 'DEBIT')),
+  amountKobo INTEGER NOT NULL CHECK (amountKobo > 0),
+  description TEXT NOT NULL,
+  clientId TEXT REFERENCES legal_clients(id),
+  caseId TEXT REFERENCES legal_cases(id),
+  reference TEXT NOT NULL,
+  externalReference TEXT,
+  recordedBy TEXT NOT NULL,
+  transactionDate INTEGER NOT NULL,
+  createdAt INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_trust_txn_account ON trust_transactions(accountId);
+CREATE INDEX IF NOT EXISTS idx_trust_txn_tenant ON trust_transactions(tenantId);
+CREATE INDEX IF NOT EXISTS idx_trust_txn_client ON trust_transactions(tenantId, clientId);
+CREATE INDEX IF NOT EXISTS idx_trust_txn_case ON trust_transactions(tenantId, caseId);
+CREATE INDEX IF NOT EXISTS idx_trust_txn_date ON trust_transactions(tenantId, transactionDate);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_trust_txn_reference ON trust_transactions(tenantId, reference);
 `;

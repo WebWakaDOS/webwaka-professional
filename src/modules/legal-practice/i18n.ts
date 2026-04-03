@@ -16,6 +16,7 @@ export interface LegalTranslations {
     invoices: string;
     documents: string;
     nbaCompliance: string;
+    trustAccounts: string;
   };
   // Dashboard
   dashboard: {
@@ -148,6 +149,45 @@ export interface LegalTranslations {
     barNumberHelp: string;
     noProfile: string;
   };
+  // Trust Accounts (NBA Rule 23)
+  trust: {
+    title: string;
+    newAccount: string;
+    accountName: string;
+    bankName: string;
+    accountNumber: string;
+    description: string;
+    balance: string;
+    totalCredits: string;
+    totalDebits: string;
+    transactions: string;
+    newTransaction: string;
+    transactionType: string;
+    amount: string;
+    transactionDate: string;
+    reference: string;
+    externalReference: string;
+    client: string;
+    case: string;
+    recordedBy: string;
+    noAccounts: string;
+    noTransactions: string;
+    auditLog: string;
+    backToAccounts: string;
+    closeAccount: string;
+    activeAccount: string;
+    closedAccount: string;
+    deposit: string;
+    disbursement: string;
+    bankCharges: string;
+    interest: string;
+    transferIn: string;
+    transferOut: string;
+    credit: string;
+    debit: string;
+    immutableNote: string;
+    rule23Note: string;
+  };
   // Common
   common: {
     loading: string;
@@ -185,7 +225,8 @@ const translations: Record<Language, LegalTranslations> = {
       timeEntries: 'Time Entries',
       invoices: 'Invoices',
       documents: 'Documents',
-      nbaCompliance: 'NBA Compliance'
+      nbaCompliance: 'NBA Compliance',
+      trustAccounts: 'Trust Accounts'
     },
     dashboard: {
       title: 'Legal Practice Dashboard',
@@ -311,6 +352,44 @@ const translations: Record<Language, LegalTranslations> = {
       barNumberHelp: 'Format: NBA/{BRANCH}/{YEAR}/{SEQUENCE} e.g. NBA/LAG/2015/001234',
       noProfile: 'No NBA profile registered yet.'
     },
+    trust: {
+      title: 'Trust Accounts',
+      newAccount: 'Open Trust Account',
+      accountName: 'Account Name',
+      bankName: 'Bank Name',
+      accountNumber: 'Account Number',
+      description: 'Description',
+      balance: 'Balance',
+      totalCredits: 'Total Credits',
+      totalDebits: 'Total Debits',
+      transactions: 'Transactions',
+      newTransaction: 'Record Transaction',
+      transactionType: 'Transaction Type',
+      amount: 'Amount (₦)',
+      transactionDate: 'Transaction Date',
+      reference: 'Reference',
+      externalReference: 'Bank Reference',
+      client: 'Client',
+      case: 'Case',
+      recordedBy: 'Recorded By',
+      noAccounts: 'No trust accounts yet. Open your first client trust account.',
+      noTransactions: 'No transactions recorded yet.',
+      auditLog: 'Audit Log',
+      backToAccounts: 'Back to Trust Accounts',
+      closeAccount: 'Close Account',
+      activeAccount: 'Active',
+      closedAccount: 'Closed',
+      deposit: 'Deposit',
+      disbursement: 'Disbursement',
+      bankCharges: 'Bank Charges',
+      interest: 'Interest',
+      transferIn: 'Transfer In',
+      transferOut: 'Transfer Out',
+      credit: 'Credit',
+      debit: 'Debit',
+      immutableNote: 'Trust transactions are permanent records and cannot be modified or deleted.',
+      rule23Note: 'NBA Rule 23: All client funds must be held in a separate trust account.'
+    },
     common: {
       loading: 'Loading...',
       error: 'An error occurred',
@@ -346,7 +425,8 @@ const translations: Record<Language, LegalTranslations> = {
       timeEntries: 'Akọsilẹ Akoko',
       invoices: 'Awọn Ìwé Ìsanwó',
       documents: 'Awọn Iwe',
-      nbaCompliance: 'Ibamu NBA'
+      nbaCompliance: 'Ibamu NBA',
+      trustAccounts: 'Awọn Akọọlẹ Igbẹkẹle'
     },
     dashboard: {
       title: 'Pẹpẹ Iṣẹ Ofin',
@@ -472,6 +552,44 @@ const translations: Record<Language, LegalTranslations> = {
       barNumberHelp: 'Ọna: NBA/{ẸKA}/{ỌDÚ}/{NỌMBA} fun apẹẹrẹ NBA/LAG/2015/001234',
       noProfile: 'Ko si profaili NBA ti o forukọsilẹ sibẹsibẹ.'
     },
+    trust: {
+      title: 'Awọn Akọọlẹ Igbẹkẹle',
+      newAccount: 'Ṣii Akọọlẹ Igbẹkẹle',
+      accountName: 'Orukọ Akọọlẹ',
+      bankName: 'Orukọ Ile-ifowopamọ',
+      accountNumber: 'Nọmba Akọọlẹ',
+      description: 'Apejuwe',
+      balance: 'Iye Ti Ku',
+      totalCredits: 'Àpapọ̀ Ife Wọle',
+      totalDebits: 'Àpapọ̀ Ife Jade',
+      transactions: 'Awọn Iṣowo',
+      newTransaction: 'Gba Iṣowo',
+      transactionType: 'Iru Iṣowo',
+      amount: 'Iye (₦)',
+      transactionDate: 'Ọjọ Iṣowo',
+      reference: 'Itọkasi',
+      externalReference: 'Itọkasi Ile-ifowopamọ',
+      client: 'Alabara',
+      case: 'Ẹjọ',
+      recordedBy: 'Ti Gba Nipasẹ',
+      noAccounts: 'Ko si akọọlẹ igbẹkẹle sibẹsibẹ.',
+      noTransactions: 'Ko si iṣowo ti a gbasilẹ sibẹsibẹ.',
+      auditLog: 'Akọọlẹ Atayọwo',
+      backToAccounts: 'Pada si Awọn Akọọlẹ',
+      closeAccount: 'Pa Akọọlẹ',
+      activeAccount: 'Ṣiṣiṣẹ',
+      closedAccount: 'Ti Pa',
+      deposit: 'Ifipamọ',
+      disbursement: 'Isanwó',
+      bankCharges: 'Ìdáná Ile-ifowopamọ',
+      interest: 'Èrè',
+      transferIn: 'Gbigbe Wọle',
+      transferOut: 'Gbigbe Jade',
+      credit: 'Ife Wọle',
+      debit: 'Ife Jade',
+      immutableNote: 'Awọn iṣowo igbẹkẹle jẹ igbasilẹ ayeraye ko le yipada tabi pa.',
+      rule23Note: 'Ofin NBA 23: Gbogbo owo alabara gbọdọ wa ni akọọlẹ igbẹkẹle lọtọ.'
+    },
     common: {
       loading: 'Ń gbé...',
       error: 'Aṣiṣe kan waye',
@@ -507,7 +625,8 @@ const translations: Record<Language, LegalTranslations> = {
       timeEntries: 'Ndekọ Oge',
       invoices: 'Ụgwọ',
       documents: 'Akwụkwọ',
-      nbaCompliance: 'Ịdabara NBA'
+      nbaCompliance: 'Ịdabara NBA',
+      trustAccounts: 'Akantị Ntụkwasiobi'
     },
     dashboard: {
       title: 'Ọchịchọ Ọrụ Iwu',
@@ -633,6 +752,44 @@ const translations: Record<Language, LegalTranslations> = {
       barNumberHelp: 'Ụdị: NBA/{NGALABA}/{AFỌ}/{NỌMBA} dịka NBA/LAG/2015/001234',
       noProfile: 'Enweghị profaịlụ NBA debanyere ọ bụla.'
     },
+    trust: {
+      title: 'Akantị Ntụkwasiobi',
+      newAccount: 'Mepee Akantị Ntụkwasiobi',
+      accountName: 'Aha Akantị',
+      bankName: 'Aha Ụlọ akụ',
+      accountNumber: 'Nọmba Akantị',
+      description: 'Nkọwa',
+      balance: 'Ego Fọdụrụ',
+      totalCredits: 'Ọnụọgụ Ego Abataghị',
+      totalDebits: 'Ọnụọgụ Ego Pụtara',
+      transactions: 'Azụmahịa',
+      newTransaction: 'Dekọ Azụmahịa',
+      transactionType: 'Ụdị Azụmahịa',
+      amount: 'Ego (₦)',
+      transactionDate: 'Ụbọchị Azụmahịa',
+      reference: 'Ntụaka',
+      externalReference: 'Ntụaka Ụlọ akụ',
+      client: 'Onye Ahịa',
+      case: 'Ikpe',
+      recordedBy: 'Dekọtara Site',
+      noAccounts: 'Enweghị akantị ntụkwasiobi ọ bụla.',
+      noTransactions: 'Enweghị azụmahịa edekọtara ọ bụla.',
+      auditLog: 'Ndekọ Nchekwa',
+      backToAccounts: 'Laghachi na Akantị',
+      closeAccount: 'Mechie Akantị',
+      activeAccount: 'Na-arụ Ọrụ',
+      closedAccount: 'Mechiri',
+      deposit: 'Ntinye Ego',
+      disbursement: 'Nkesa Ego',
+      bankCharges: 'Ụgwọ Ụlọ akụ',
+      interest: 'Ọghọm',
+      transferIn: 'Nbufe Batara',
+      transferOut: 'Nbufe Pụtara',
+      credit: 'Ego Abataghị',
+      debit: 'Ego Pụtara',
+      immutableNote: 'Azụmahịa ntụkwasiobi bụ ndekọ ebighi ebi enweghị ike gbanwee ma ọ bụ hichapụ ya.',
+      rule23Note: 'Iwu NBA 23: Ego ndị ahịa niile ga-anọ na akantị ntụkwasiobi dị iche.'
+    },
     common: {
       loading: 'Na-ebu...',
       error: 'Mperi mere',
@@ -668,7 +825,8 @@ const translations: Record<Language, LegalTranslations> = {
       timeEntries: 'Rikodin Lokaci',
       invoices: 'Takardar Biya',
       documents: 'Takardun',
-      nbaCompliance: 'Bin Doka NBA'
+      nbaCompliance: 'Bin Doka NBA',
+      trustAccounts: 'Asusun Amana'
     },
     dashboard: {
       title: 'Allon Ayyukan Shari\'a',
@@ -793,6 +951,44 @@ const translations: Record<Language, LegalTranslations> = {
       verifyProfile: 'Tabbatar da Bayanan',
       barNumberHelp: 'Tsari: NBA/{RESHE}/{SHEKARA}/{LAMBA} misali NBA/LAG/2015/001234',
       noProfile: 'Babu bayanan NBA da aka yi rajista tukuna.'
+    },
+    trust: {
+      title: 'Asusun Amana',
+      newAccount: 'Buɗe Asusun Amana',
+      accountName: 'Sunan Asusu',
+      bankName: 'Sunan Banki',
+      accountNumber: 'Lambar Asusu',
+      description: 'Bayani',
+      balance: 'Saura',
+      totalCredits: 'Jimillar Kuɗin Da Ya Shiga',
+      totalDebits: 'Jimillar Kuɗin Da Ya Fita',
+      transactions: 'Ma\'amala',
+      newTransaction: 'Yi Rikodin Ma\'amala',
+      transactionType: 'Nau\'in Ma\'amala',
+      amount: 'Adadin Kuɗi (₦)',
+      transactionDate: 'Ranar Ma\'amala',
+      reference: 'Lambar Soro',
+      externalReference: 'Lambar Soro ta Banki',
+      client: 'Abokin Ciniki',
+      case: 'Shari\'a',
+      recordedBy: 'Wanda Ya Yi Rikodin',
+      noAccounts: 'Babu asusun amana tukuna.',
+      noTransactions: 'Babu ma\'amala da aka yi rikodin tukuna.',
+      auditLog: 'Rikodin Duba',
+      backToAccounts: 'Koma ga Asusun',
+      closeAccount: 'Rufe Asusu',
+      activeAccount: 'Mai Aiki',
+      closedAccount: 'An Rufe',
+      deposit: 'Ajiya',
+      disbursement: 'Biyan Kuɗi',
+      bankCharges: 'Kuɗin Banki',
+      interest: 'Riba',
+      transferIn: 'Canja Wuri Shiga',
+      transferOut: 'Canja Wuri Fita',
+      credit: 'Kuɗin Da Ya Shiga',
+      debit: 'Kuɗin Da Ya Fita',
+      immutableNote: 'Ma\'amalar amana rikodin na har abada ba za a iya canza su ko share su ba.',
+      rule23Note: 'Doka NBA 23: Dole ne a adana dukkan kuɗin abokan ciniki a asusun amana na daban.'
     },
     common: {
       loading: 'Ana lodi...',

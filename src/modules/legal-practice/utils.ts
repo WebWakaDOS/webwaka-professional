@@ -168,6 +168,36 @@ export function generateInvoiceNumber(sequence: number): string {
   return `INV-${year}-${seq}`;
 }
 
+/**
+ * Generate a human-readable trust transaction reference.
+ * Format: TT-{YEAR}-{SEQUENCE_4_DIGITS}
+ * Example: TT-2026-0001
+ *
+ * Blueprint Reference: Part 10.8 — NBA Trust Account Ledger
+ * Blueprint Reference: Part 9.2 — Append-Only / Immutable Records
+ */
+export function generateTrustTransactionRef(sequence: number): string {
+  const year = new Date().getFullYear();
+  const seq = String(sequence).padStart(4, '0');
+  return `TT-${year}-${seq}`;
+}
+
+/**
+ * Calculate the running balance of a trust account from its transactions.
+ * Balance = SUM(credits) - SUM(debits)
+ * All amounts in kobo. Result is always >= 0 for a healthy account.
+ *
+ * Blueprint Reference: Part 10.8 — NBA Trust Account Ledger
+ * INVARIANT: Balance is NEVER stored — always derived from the immutable ledger.
+ */
+export function calculateTrustBalance(transactions: Array<{ direction: 'CREDIT' | 'DEBIT'; amountKobo: number }>): number {
+  return transactions.reduce((balance, txn) => {
+    return txn.direction === 'CREDIT'
+      ? balance + txn.amountKobo
+      : balance - txn.amountKobo;
+  }, 0);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // NDPR COMPLIANCE
 // Blueprint Reference: Part 9.1 — "Nigeria First: NDPR compliance enforced."

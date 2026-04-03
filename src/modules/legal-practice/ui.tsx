@@ -260,7 +260,7 @@ function getStatusColor(status: string): string {
 // TYPES
 // ─────────────────────────────────────────────────────────────────────────────
 
-type View = 'dashboard' | 'clients' | 'cases' | 'time' | 'invoices' | 'nba';
+type View = 'dashboard' | 'clients' | 'cases' | 'time' | 'invoices' | 'nba' | 'trust';
 
 interface DashboardStats {
   totalClients: number;
@@ -352,6 +352,47 @@ interface NBAProfile {
   verifiedAt?: number | null;
 }
 
+interface TrustAccount {
+  id: string;
+  tenantId: string;
+  accountName: string;
+  bankName: string;
+  accountNumber: string;
+  description: string | null;
+  isActive: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface TrustBalance {
+  accountId: string;
+  totalCreditsKobo: number;
+  totalDebitsKobo: number;
+  balanceKobo: number;
+  transactionCount: number;
+}
+
+interface TrustAccountWithBalance extends TrustAccount {
+  balance: TrustBalance;
+}
+
+interface TrustTxn {
+  id: string;
+  tenantId: string;
+  accountId: string;
+  transactionType: 'DEPOSIT' | 'DISBURSEMENT' | 'BANK_CHARGES' | 'INTEREST' | 'TRANSFER_IN' | 'TRANSFER_OUT';
+  direction: 'CREDIT' | 'DEBIT';
+  amountKobo: number;
+  description: string;
+  clientId: string | null;
+  caseId: string | null;
+  reference: string;
+  externalReference: string | null;
+  recordedBy: string;
+  transactionDate: number;
+  createdAt: number;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -386,6 +427,10 @@ export const LegalPracticeUI: React.FC<LegalPracticeUIProps> = ({
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [nbaProfile, setNBAProfile] = useState<NBAProfile | null>(null);
   const [selectedCase, setSelectedCase] = useState<LegalCase | null>(null);
+  const [trustAccounts, setTrustAccounts] = useState<TrustAccount[]>([]);
+  const [selectedTrustAccount, setSelectedTrustAccount] = useState<TrustAccountWithBalance | null>(null);
+  const [trustTransactions, setTrustTransactions] = useState<TrustTxn[]>([]);
+  const [trustBalance, setTrustBalance] = useState<TrustBalance | null>(null);
 
   // Form state
   const [showForm, setShowForm] = useState<string | null>(null);
@@ -452,6 +497,12 @@ export const LegalPracticeUI: React.FC<LegalPracticeUIProps> = ({
         } else if (view === 'nba') {
           const data = await apiCall<NBAProfile>('/api/legal/nba/profile');
           if (data) setNBAProfile(data);
+        } else if (view === 'trust') {
+          const data = await apiCall<TrustAccount[]>('/api/legal/trust-accounts');
+          if (data) setTrustAccounts(data);
+          setSelectedTrustAccount(null);
+          setTrustTransactions([]);
+          setTrustBalance(null);
         }
       } finally {
         setLoading(false);
@@ -525,7 +576,8 @@ export const LegalPracticeUI: React.FC<LegalPracticeUIProps> = ({
       { key: 'cases', label: t.nav.cases },
       { key: 'time', label: t.nav.timeEntries },
       { key: 'invoices', label: t.nav.invoices },
-      { key: 'nba', label: t.nav.nbaCompliance }
+      { key: 'nba', label: t.nav.nbaCompliance },
+      { key: 'trust', label: t.nav.trustAccounts }
     ];
     return (
       <nav style={styles.nav}>
@@ -1156,6 +1208,350 @@ export const LegalPracticeUI: React.FC<LegalPracticeUIProps> = ({
   };
 
   // ─────────────────────────────────────────────────────────────────────────
+  // TRUST ACCOUNT LEDGER VIEW — NBA Rule 23 Compliance
+  // Blueprint Reference: Part 10.8 — NBA Trust Account Ledger
+  // INVARIANT: No edit or delete actions are exposed. Reversing entries only.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const renderTrust = () => {
+    const TRANSACTION_TYPE_LABELS: Record<TrustTxn['transactionType'], string> = {
+      DEPOSIT: t.trust.deposit,
+      DISBURSEMENT: t.trust.disbursement,
+      BANK_CHARGES: t.trust.bankCharges,
+      INTEREST: t.trust.interest,
+      TRANSFER_IN: t.trust.transferIn,
+      TRANSFER_OUT: t.trust.transferOut
+    };
+
+    const loadAccountDetail = async (account: TrustAccount) => {
+      setLoading(true);
+      try {
+        const data = await apiCall<{ account: TrustAccountWithBalance; transactions: TrustTxn[]; balance: TrustBalance }>(
+          `/api/legal/trust-accounts/${account.id}/transactions`
+        );
+        if (data) {
+          setSelectedTrustAccount(data.account);
+          setTrustTransactions(data.transactions);
+          setTrustBalance(data.balance);
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    // ── Transaction detail / audit log ──────────────────────────────────────
+    if (selectedTrustAccount) {
+      const bal = trustBalance;
+      return (
+        <div>
+          <button
+            style={{ ...styles.btn('secondary'), marginBottom: '1rem' }}
+            onClick={() => { setSelectedTrustAccount(null); setTrustTransactions([]); setTrustBalance(null); }}
+          >
+            ← {t.trust.backToAccounts}
+          </button>
+
+          {/* Account Summary Card */}
+          <div style={{ backgroundColor: COLORS.primary, color: COLORS.white, borderRadius: '8px', padding: '1.25rem', marginBottom: '1.25rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: '1.1rem' }}>{selectedTrustAccount.accountName}</h2>
+                <p style={{ margin: '0.25rem 0 0', fontSize: '0.875rem', opacity: 0.8 }}>
+                  {selectedTrustAccount.bankName} • {selectedTrustAccount.accountNumber}
+                </p>
+              </div>
+              <span style={{
+                backgroundColor: selectedTrustAccount.isActive ? COLORS.success : COLORS.gray,
+                color: COLORS.white, padding: '0.2rem 0.6rem', borderRadius: '12px', fontSize: '0.75rem'
+              }}>
+                {selectedTrustAccount.isActive ? t.trust.activeAccount : t.trust.closedAccount}
+              </span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginTop: '1rem' }}>
+              <div style={{ textAlign: 'center' }}>
+                <p style={{ margin: 0, fontSize: '0.75rem', opacity: 0.75 }}>{t.trust.totalCredits}</p>
+                <p style={{ margin: 0, fontSize: '1rem', fontWeight: 'bold', color: '#90ee90' }}>
+                  {bal ? koboToNaira(bal.totalCreditsKobo) : '—'}
+                </p>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <p style={{ margin: 0, fontSize: '0.75rem', opacity: 0.75 }}>{t.trust.totalDebits}</p>
+                <p style={{ margin: 0, fontSize: '1rem', fontWeight: 'bold', color: '#ffb3b3' }}>
+                  {bal ? koboToNaira(bal.totalDebitsKobo) : '—'}
+                </p>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <p style={{ margin: 0, fontSize: '0.75rem', opacity: 0.75 }}>{t.trust.balance}</p>
+                <p style={{ margin: 0, fontSize: '1.1rem', fontWeight: 'bold' }}>
+                  {bal ? koboToNaira(bal.balanceKobo) : '—'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Immutability notice */}
+          <div style={{ backgroundColor: '#fff3cd', border: '1px solid #ffc107', borderRadius: '6px', padding: '0.75rem', marginBottom: '1rem', fontSize: '0.8rem', color: '#856404' }}>
+            🔒 {t.trust.immutableNote}
+          </div>
+
+          {/* Record new transaction */}
+          {selectedTrustAccount.isActive && (
+            <div style={{ marginBottom: '1.25rem' }}>
+              {showForm === 'trust-txn' ? (
+                <div style={{ backgroundColor: COLORS.white, border: `1px solid ${COLORS.border}`, borderRadius: '8px', padding: '1rem' }}>
+                  <h3 style={{ ...styles.sectionTitle, marginTop: 0 }}>{t.trust.newTransaction}</h3>
+                  <form onSubmit={async e => {
+                    e.preventDefault();
+                    const fd = new FormData(e.currentTarget);
+                    const amountNaira = parseFloat(fd.get('amount') as string);
+                    const body = {
+                      transactionType: fd.get('transactionType') as TrustTxn['transactionType'],
+                      amountKobo: nairaToKobo(amountNaira),
+                      description: fd.get('description') as string,
+                      externalReference: (fd.get('externalReference') as string) || undefined,
+                      transactionDate: new Date(fd.get('transactionDate') as string).getTime()
+                    };
+                    setLoading(true);
+                    setError(null);
+                    try {
+                      const result = await apiCall<{ transaction: TrustTxn; balance: TrustBalance }>(
+                        `/api/legal/trust-accounts/${selectedTrustAccount.id}/transactions`,
+                        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+                      );
+                      if (result) {
+                        setTrustBalance(result.balance);
+                        setTrustTransactions(prev => [result.transaction, ...prev]);
+                        setShowForm(null);
+                      }
+                    } finally {
+                      setLoading(false);
+                    }
+                  }}>
+                    <div style={styles.formGroup}>
+                      <label style={styles.label}>{t.trust.transactionType} *</label>
+                      <select name="transactionType" style={styles.input} required>
+                        <option value="DEPOSIT">{t.trust.deposit}</option>
+                        <option value="DISBURSEMENT">{t.trust.disbursement}</option>
+                        <option value="BANK_CHARGES">{t.trust.bankCharges}</option>
+                        <option value="INTEREST">{t.trust.interest}</option>
+                        <option value="TRANSFER_IN">{t.trust.transferIn}</option>
+                        <option value="TRANSFER_OUT">{t.trust.transferOut}</option>
+                      </select>
+                    </div>
+                    <div style={styles.formGroup}>
+                      <label style={styles.label}>{t.trust.amount} *</label>
+                      <input name="amount" type="number" min="0.01" step="0.01" style={styles.input} required />
+                    </div>
+                    <div style={styles.formGroup}>
+                      <label style={styles.label}>{t.trust.transactionDate} *</label>
+                      <input name="transactionDate" type="date" style={styles.input} required
+                        defaultValue={new Date().toISOString().split('T')[0]} />
+                    </div>
+                    <div style={styles.formGroup}>
+                      <label style={styles.label}>{t.common.save} — {t.trust.description}</label>
+                      <input name="description" type="text" style={styles.input} required
+                        placeholder="e.g. Court filing fees for Suit No. FHC/ABJ/2026/100" />
+                    </div>
+                    <div style={styles.formGroup}>
+                      <label style={styles.label}>{t.trust.externalReference}</label>
+                      <input name="externalReference" type="text" style={styles.input}
+                        placeholder="e.g. Bank teller number / transfer ref" />
+                    </div>
+                    {error && <p style={{ color: COLORS.danger }}>{error}</p>}
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button type="submit" style={styles.btn('primary')} disabled={loading}>
+                        {loading ? t.common.loading : t.trust.newTransaction}
+                      </button>
+                      <button type="button" style={styles.btn('secondary')} onClick={() => setShowForm(null)}>
+                        {t.common.cancel}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              ) : (
+                <button style={styles.btn('primary')} onClick={() => setShowForm('trust-txn')}>
+                  + {t.trust.newTransaction}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Transaction audit log */}
+          <h3 style={styles.sectionTitle}>{t.trust.auditLog} ({bal?.transactionCount ?? 0})</h3>
+          {trustTransactions.length === 0 ? (
+            <p style={{ color: COLORS.gray }}>{t.trust.noTransactions}</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {trustTransactions.map(txn => (
+                <div key={txn.id} style={{
+                  backgroundColor: COLORS.white,
+                  border: `1px solid ${COLORS.border}`,
+                  borderLeft: `4px solid ${txn.direction === 'CREDIT' ? COLORS.success : COLORS.danger}`,
+                  borderRadius: '6px',
+                  padding: '0.75rem'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div>
+                      <span style={{ fontWeight: 600, fontSize: '0.875rem' }}>
+                        {TRANSACTION_TYPE_LABELS[txn.transactionType]}
+                      </span>
+                      <span style={{
+                        marginLeft: '0.5rem',
+                        fontSize: '0.75rem',
+                        color: txn.direction === 'CREDIT' ? COLORS.success : COLORS.danger,
+                        fontWeight: 600
+                      }}>
+                        {txn.direction === 'CREDIT' ? '▲' : '▼'} {txn.direction === 'CREDIT' ? t.trust.credit : t.trust.debit}
+                      </span>
+                    </div>
+                    <span style={{ fontWeight: 700, color: txn.direction === 'CREDIT' ? COLORS.success : COLORS.danger }}>
+                      {txn.direction === 'CREDIT' ? '+' : '-'}{koboToNaira(txn.amountKobo)}
+                    </span>
+                  </div>
+                  <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: COLORS.darkGray }}>{txn.description}</p>
+                  <div style={{ display: 'flex', gap: '1rem', marginTop: '0.4rem', fontSize: '0.75rem', color: COLORS.gray }}>
+                    <span>📅 {formatWATDate(txn.transactionDate)}</span>
+                    <span>🔖 {txn.reference}</span>
+                    {txn.externalReference && <span>🏦 {txn.externalReference}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ── Account list view ────────────────────────────────────────────────────
+    return (
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <h2 style={styles.sectionTitle}>{t.trust.title}</h2>
+        </div>
+
+        {/* NBA Rule 23 notice */}
+        <div style={{ backgroundColor: '#d4edda', border: '1px solid #c3e6cb', borderRadius: '6px', padding: '0.75rem', marginBottom: '1rem', fontSize: '0.8rem', color: '#155724' }}>
+          ⚖️ {t.trust.rule23Note}
+        </div>
+
+        {/* Create account form */}
+        {showForm === 'trust-account' ? (
+          <div style={{ backgroundColor: COLORS.white, border: `1px solid ${COLORS.border}`, borderRadius: '8px', padding: '1rem', marginBottom: '1.25rem' }}>
+            <h3 style={{ ...styles.sectionTitle, marginTop: 0 }}>{t.trust.newAccount}</h3>
+            <form onSubmit={async e => {
+              e.preventDefault();
+              const fd = new FormData(e.currentTarget);
+              const body = {
+                accountName: fd.get('accountName') as string,
+                bankName: fd.get('bankName') as string,
+                accountNumber: fd.get('accountNumber') as string,
+                description: (fd.get('description') as string) || undefined
+              };
+              setLoading(true);
+              setError(null);
+              try {
+                const result = await apiCall<TrustAccount>(
+                  '/api/legal/trust-accounts',
+                  { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+                );
+                if (result) {
+                  setTrustAccounts(prev => [result, ...prev]);
+                  setShowForm(null);
+                }
+              } finally {
+                setLoading(false);
+              }
+            }}>
+              <div style={styles.formGroup}>
+                <label style={styles.label}>{t.trust.accountName} *</label>
+                <input name="accountName" type="text" style={styles.input} required
+                  placeholder="e.g. Commercial Litigation Trust Account" />
+              </div>
+              <div style={styles.formGroup}>
+                <label style={styles.label}>{t.trust.bankName} *</label>
+                <input name="bankName" type="text" style={styles.input} required
+                  placeholder="e.g. First Bank Nigeria" />
+              </div>
+              <div style={styles.formGroup}>
+                <label style={styles.label}>{t.trust.accountNumber} *</label>
+                <input name="accountNumber" type="text" style={styles.input} required
+                  placeholder="10-digit account number" />
+              </div>
+              <div style={styles.formGroup}>
+                <label style={styles.label}>{t.trust.description}</label>
+                <input name="description" type="text" style={styles.input}
+                  placeholder="Optional description" />
+              </div>
+              {error && <p style={{ color: COLORS.danger }}>{error}</p>}
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button type="submit" style={styles.btn('primary')} disabled={loading}>
+                  {loading ? t.common.loading : t.trust.newAccount}
+                </button>
+                <button type="button" style={styles.btn('secondary')} onClick={() => setShowForm(null)}>
+                  {t.common.cancel}
+                </button>
+              </div>
+            </form>
+          </div>
+        ) : (
+          <button style={{ ...styles.btn('primary'), marginBottom: '1rem' }} onClick={() => setShowForm('trust-account')}>
+            + {t.trust.newAccount}
+          </button>
+        )}
+
+        {loading && <p style={{ color: COLORS.gray }}>{t.common.loading}</p>}
+
+        {trustAccounts.length === 0 && !loading ? (
+          <p style={{ color: COLORS.gray }}>{t.trust.noAccounts}</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {trustAccounts.map(account => (
+              <div
+                key={account.id}
+                onClick={() => { void loadAccountDetail(account); }}
+                style={{
+                  backgroundColor: COLORS.white,
+                  border: `1px solid ${COLORS.border}`,
+                  borderRadius: '8px',
+                  padding: '1rem',
+                  cursor: 'pointer',
+                  borderLeft: `4px solid ${account.isActive ? COLORS.primary : COLORS.gray}`,
+                  transition: 'box-shadow 0.15s'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '1rem', color: COLORS.primary }}>{account.accountName}</h3>
+                    <p style={{ margin: '0.2rem 0 0', fontSize: '0.85rem', color: COLORS.gray }}>
+                      {account.bankName} • {account.accountNumber}
+                    </p>
+                    {account.description && (
+                      <p style={{ margin: '0.2rem 0 0', fontSize: '0.8rem', color: COLORS.gray }}>{account.description}</p>
+                    )}
+                  </div>
+                  <span style={{
+                    backgroundColor: account.isActive ? '#d4edda' : '#e9ecef',
+                    color: account.isActive ? '#155724' : COLORS.gray,
+                    padding: '0.2rem 0.6rem',
+                    borderRadius: '12px',
+                    fontSize: '0.75rem',
+                    fontWeight: 600
+                  }}>
+                    {account.isActive ? t.trust.activeAccount : t.trust.closedAccount}
+                  </span>
+                </div>
+                <p style={{ margin: '0.5rem 0 0', fontSize: '0.75rem', color: COLORS.gray }}>
+                  {t.trust.transactions} →
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
   // MAIN RENDER
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -1165,7 +1561,7 @@ export const LegalPracticeUI: React.FC<LegalPracticeUIProps> = ({
       {renderOfflineBanner()}
       {renderNav()}
       <main style={styles.main}>
-        {error && view !== 'clients' && view !== 'nba' && (
+        {error && view !== 'clients' && view !== 'nba' && view !== 'trust' && (
           <div style={{ backgroundColor: '#f8d7da', color: COLORS.danger, padding: '0.75rem', borderRadius: '6px', marginBottom: '1rem' }}>
             {error}
           </div>
@@ -1176,6 +1572,7 @@ export const LegalPracticeUI: React.FC<LegalPracticeUIProps> = ({
         {view === 'time' && renderTimeEntries()}
         {view === 'invoices' && renderInvoices()}
         {view === 'nba' && renderNBA()}
+        {view === 'trust' && renderTrust()}
       </main>
     </div>
   );

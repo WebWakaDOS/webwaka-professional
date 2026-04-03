@@ -34,7 +34,7 @@ src/
       d1.ts                     # Canonical D1Database / D1PreparedStatement / D1Result types
       schema.ts                 # All entity types + D1 migration SQL
       queries.ts                # Legal Practice D1 query helpers (re-exports D1 types from d1.ts)
-    event-bus/index.ts          # PlatformEvent bus — LegalEventType, EventMgmtEventType (incl. payment_confirmed)
+    event-bus/index.ts          # PlatformEvent bus — LegalEventType (incl. trust_account.created, trust_transaction.recorded), EventMgmtEventType
     logger/                     # Structured logging
     notifications/
       termii.ts                 # TermiiClient (sendSMS) + normalizeNigerianPhone() — Nigeria First SMS

@@ -14,7 +14,9 @@ import type {
   LegalTimeEntry,
   LegalInvoice,
   LegalDocument,
-  NBAProfile
+  NBAProfile,
+  TrustAccount,
+  TrustTransaction
 } from './schema';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -486,6 +488,219 @@ export async function verifyNBAProfile(
     )
     .bind(now, now, id, tenantId)
     .run();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TRUST ACCOUNT QUERIES
+// Blueprint Reference: Part 10.8 — NBA Trust Account Ledger (Rule 23)
+// Blueprint Reference: Part 9.2 — Append-Only / Immutable Records
+//
+// INVARIANT: There are NO updateTrustTransaction or deleteTrustTransaction
+// functions. Trust transactions are immutable by design. Any call-site that
+// tries to import such a function will fail at compile time — this is intentional.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type TrustAccountRow = Omit<TrustAccount, 'isActive'> & { isActive: number };
+
+function rowToTrustAccount(r: TrustAccountRow): TrustAccount {
+  return { ...r, isActive: r.isActive === 1 };
+}
+
+export async function getTrustAccountsByTenant(
+  db: D1Database,
+  tenantId: string,
+  includeInactive = false
+): Promise<TrustAccount[]> {
+  let query = `SELECT * FROM trust_accounts WHERE tenantId = ?`;
+  const bindings: unknown[] = [tenantId];
+  if (!includeInactive) {
+    query += ` AND isActive = 1`;
+  }
+  query += ` ORDER BY createdAt DESC`;
+  const result = await db.prepare(query).bind(...bindings).all<TrustAccountRow>();
+  return result.results.map(rowToTrustAccount);
+}
+
+export async function getTrustAccountById(
+  db: D1Database,
+  tenantId: string,
+  id: string
+): Promise<TrustAccount | null> {
+  const row = await db
+    .prepare(`SELECT * FROM trust_accounts WHERE id = ? AND tenantId = ?`)
+    .bind(id, tenantId)
+    .first<TrustAccountRow>();
+  if (!row) return null;
+  return rowToTrustAccount(row);
+}
+
+export async function insertTrustAccount(
+  db: D1Database,
+  account: TrustAccount
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO trust_accounts
+       (id, tenantId, accountName, bankName, accountNumber, description, isActive, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      account.id, account.tenantId, account.accountName, account.bankName,
+      account.accountNumber, account.description, account.isActive ? 1 : 0,
+      account.createdAt, account.updatedAt
+    )
+    .run();
+}
+
+export async function updateTrustAccount(
+  db: D1Database,
+  tenantId: string,
+  id: string,
+  updates: { accountName?: string; description?: string; isActive?: boolean }
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(
+      `UPDATE trust_accounts
+       SET accountName = COALESCE(?, accountName),
+           description = COALESCE(?, description),
+           isActive = COALESCE(?, isActive),
+           updatedAt = ?
+       WHERE id = ? AND tenantId = ?`
+    )
+    .bind(
+      updates.accountName ?? null,
+      updates.description ?? null,
+      updates.isActive !== undefined ? (updates.isActive ? 1 : 0) : null,
+      now, id, tenantId
+    )
+    .run();
+}
+
+/**
+ * Insert a trust transaction — APPEND-ONLY.
+ *
+ * This is the ONLY write function for trust_transactions.
+ * There is deliberately no updateTrustTransaction or deleteTrustTransaction.
+ * Calling code that needs to "correct" a transaction must insert a reversing entry.
+ * NBA Rule 23 requires a complete, unaltered audit trail.
+ */
+export async function insertTrustTransaction(
+  db: D1Database,
+  transaction: TrustTransaction
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO trust_transactions
+       (id, tenantId, accountId, transactionType, direction, amountKobo,
+        description, clientId, caseId, reference, externalReference,
+        recordedBy, transactionDate, createdAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      transaction.id, transaction.tenantId, transaction.accountId,
+      transaction.transactionType, transaction.direction, transaction.amountKobo,
+      transaction.description, transaction.clientId, transaction.caseId,
+      transaction.reference, transaction.externalReference,
+      transaction.recordedBy, transaction.transactionDate, transaction.createdAt
+    )
+    .run();
+}
+
+export async function getTrustTransactionsByAccount(
+  db: D1Database,
+  tenantId: string,
+  accountId: string,
+  limit = 100,
+  offset = 0
+): Promise<TrustTransaction[]> {
+  const result = await db
+    .prepare(
+      `SELECT * FROM trust_transactions
+       WHERE accountId = ? AND tenantId = ?
+       ORDER BY transactionDate DESC, createdAt DESC
+       LIMIT ? OFFSET ?`
+    )
+    .bind(accountId, tenantId, limit, offset)
+    .all<TrustTransaction>();
+  return result.results;
+}
+
+export async function getTrustTransactionsByTenant(
+  db: D1Database,
+  tenantId: string,
+  filters: { clientId?: string; caseId?: string } = {},
+  limit = 100,
+  offset = 0
+): Promise<TrustTransaction[]> {
+  let query = `SELECT * FROM trust_transactions WHERE tenantId = ?`;
+  const bindings: unknown[] = [tenantId];
+  if (filters.clientId) {
+    query += ` AND clientId = ?`;
+    bindings.push(filters.clientId);
+  }
+  if (filters.caseId) {
+    query += ` AND caseId = ?`;
+    bindings.push(filters.caseId);
+  }
+  query += ` ORDER BY transactionDate DESC, createdAt DESC LIMIT ? OFFSET ?`;
+  bindings.push(limit, offset);
+  const result = await db.prepare(query).bind(...bindings).all<TrustTransaction>();
+  return result.results;
+}
+
+export interface TrustAccountBalance {
+  accountId: string;
+  totalCreditsKobo: number;
+  totalDebitsKobo: number;
+  balanceKobo: number;
+  transactionCount: number;
+}
+
+export async function getTrustAccountBalance(
+  db: D1Database,
+  tenantId: string,
+  accountId: string
+): Promise<TrustAccountBalance> {
+  const row = await db
+    .prepare(
+      `SELECT
+         accountId,
+         COALESCE(SUM(CASE WHEN direction = 'CREDIT' THEN amountKobo ELSE 0 END), 0) AS totalCreditsKobo,
+         COALESCE(SUM(CASE WHEN direction = 'DEBIT' THEN amountKobo ELSE 0 END), 0) AS totalDebitsKobo,
+         COUNT(*) AS transactionCount
+       FROM trust_transactions
+       WHERE accountId = ? AND tenantId = ?`
+    )
+    .bind(accountId, tenantId)
+    .first<{
+      accountId: string;
+      totalCreditsKobo: number;
+      totalDebitsKobo: number;
+      transactionCount: number;
+    }>();
+
+  const credits = row?.totalCreditsKobo ?? 0;
+  const debits = row?.totalDebitsKobo ?? 0;
+  return {
+    accountId,
+    totalCreditsKobo: credits,
+    totalDebitsKobo: debits,
+    balanceKobo: credits - debits,
+    transactionCount: row?.transactionCount ?? 0
+  };
+}
+
+export async function countTrustTransactionsByAccount(
+  db: D1Database,
+  tenantId: string,
+  accountId: string
+): Promise<number> {
+  const row = await db
+    .prepare(`SELECT COUNT(*) as count FROM trust_transactions WHERE accountId = ? AND tenantId = ?`)
+    .bind(accountId, tenantId)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

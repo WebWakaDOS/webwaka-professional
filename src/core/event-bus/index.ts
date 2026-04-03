@@ -31,7 +31,9 @@ export type LegalEventType =
   | 'legal.invoice.sent'
   | 'legal.invoice.paid'
   | 'legal.document.uploaded'
-  | 'legal.nba.profile_verified';
+  | 'legal.nba.profile_verified'
+  | 'legal.trust_account.created'
+  | 'legal.trust_transaction.recorded';
 
 export type EventMgmtEventType =
   | 'event_mgmt.event.created'

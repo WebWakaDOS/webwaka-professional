@@ -41,12 +41,21 @@ import {
   insertNBAProfile,
   verifyNBAProfile,
   getDashboardStats,
+  getTrustAccountsByTenant,
+  getTrustAccountById,
+  insertTrustAccount,
+  updateTrustAccount,
+  insertTrustTransaction,
+  getTrustTransactionsByAccount,
+  getTrustAccountBalance,
+  countTrustTransactionsByAccount,
   type D1Database
 } from '../../../core/db/queries';
 import {
   generateId,
   generateCaseReference,
   generateInvoiceNumber,
+  generateTrustTransactionRef,
   calculateTimeEntryAmount,
   calculateVAT,
   validateNBABarNumber,
@@ -61,8 +70,12 @@ import type {
   LegalInvoice,
   LegalDocument,
   NBAProfile,
+  TrustAccount,
+  TrustTransaction,
+  TrustTransactionType,
   CaseStatus
 } from '../../../core/db/schema';
+import { TRUST_TRANSACTION_DIRECTION } from '../../../core/db/schema';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ENVIRONMENT BINDINGS
@@ -1025,6 +1038,237 @@ app.post('/webhooks/legal/paystack', async (c) => {
   } catch (error) {
     logger.error('Paystack webhook processing error', { error: String(error) });
     return c.json<ApiResponse>(fail(['Webhook processing failed']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NBA TRUST ACCOUNT LEDGER ROUTES (T-PRO-01)
+// Blueprint Reference: Part 10.8 — NBA Compliance (Rule 23: Client Trust Accounts)
+// Blueprint Reference: Part 9.2 — Append-Only / Immutable Records
+//
+// CRITICAL INVARIANT: There are NO PUT/PATCH/DELETE routes for trust_transactions.
+// Trust transactions are immutable. An attorney who records an incorrect transaction
+// must insert a reversing entry — they cannot modify or delete past entries.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// LIST trust accounts for tenant
+app.get('/api/legal/trust-accounts', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const includeInactive = c.req.query('includeInactive') === 'true';
+  try {
+    const accounts = await getTrustAccountsByTenant(c.env.DB, tenantId, includeInactive);
+    return c.json<ApiResponse>(ok(accounts));
+  } catch (error) {
+    logger.error('Failed to list trust accounts', { tenantId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to retrieve trust accounts']), 500);
+  }
+});
+
+// GET single trust account with balance
+app.get('/api/legal/trust-accounts/:id', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const id = c.req.param('id');
+  try {
+    const account = await getTrustAccountById(c.env.DB, tenantId, id);
+    if (!account) return c.json<ApiResponse>(fail(['Trust account not found']), 404);
+
+    const balance = await getTrustAccountBalance(c.env.DB, tenantId, id);
+    return c.json<ApiResponse>(ok({ ...account, balance }));
+  } catch (error) {
+    logger.error('Failed to get trust account', { tenantId, id, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to retrieve trust account']), 500);
+  }
+});
+
+// CREATE trust account (admin only)
+app.post('/api/legal/trust-accounts', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const role = c.get('role' as never) as string;
+  const userId = c.get('userId' as never) as string;
+
+  if (role !== 'admin') {
+    return c.json<ApiResponse>(fail(['Insufficient permissions — admin role required to create trust accounts']), 403);
+  }
+
+  try {
+    const body = await c.req.json<{
+      accountName: string;
+      bankName: string;
+      accountNumber: string;
+      description?: string;
+    }>();
+
+    if (!body.accountName || !body.bankName || !body.accountNumber) {
+      return c.json<ApiResponse>(fail(['accountName, bankName, and accountNumber are required']), 400);
+    }
+
+    const now = nowUTC();
+    const account: TrustAccount = {
+      id: generateId('tac'),
+      tenantId,
+      accountName: body.accountName,
+      bankName: body.bankName,
+      accountNumber: body.accountNumber,
+      description: body.description ?? null,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    await insertTrustAccount(c.env.DB, account);
+
+    await publishEvent(
+      createEvent(tenantId, 'legal.trust_account.created', { accountId: account.id, createdBy: userId }),
+      { EVENT_BUS_URL: c.env.EVENT_BUS_URL, EVENT_BUS_API_KEY: c.env.EVENT_BUS_API_KEY }
+    );
+
+    logger.info('Trust account created', { tenantId, accountId: account.id });
+    return c.json<ApiResponse>(ok(account), 201);
+  } catch (error) {
+    logger.error('Failed to create trust account', { tenantId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to create trust account']), 500);
+  }
+});
+
+// UPDATE trust account metadata (name, description, active status) — admin only
+app.patch('/api/legal/trust-accounts/:id', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const role = c.get('role' as never) as string;
+  const id = c.req.param('id');
+
+  if (role !== 'admin') {
+    return c.json<ApiResponse>(fail(['Insufficient permissions — admin role required']), 403);
+  }
+
+  try {
+    const account = await getTrustAccountById(c.env.DB, tenantId, id);
+    if (!account) return c.json<ApiResponse>(fail(['Trust account not found']), 404);
+
+    const body = await c.req.json<{ accountName?: string; description?: string; isActive?: boolean }>();
+    await updateTrustAccount(c.env.DB, tenantId, id, body);
+
+    const updated = await getTrustAccountById(c.env.DB, tenantId, id);
+    logger.info('Trust account updated', { tenantId, accountId: id });
+    return c.json<ApiResponse>(ok(updated));
+  } catch (error) {
+    logger.error('Failed to update trust account', { tenantId, id, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to update trust account']), 500);
+  }
+});
+
+// GET transactions for a trust account (audit log)
+app.get('/api/legal/trust-accounts/:id/transactions', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const accountId = c.req.param('id');
+  const limit = parseInt(c.req.query('limit') ?? '100', 10);
+  const offset = parseInt(c.req.query('offset') ?? '0', 10);
+
+  try {
+    const account = await getTrustAccountById(c.env.DB, tenantId, accountId);
+    if (!account) return c.json<ApiResponse>(fail(['Trust account not found']), 404);
+
+    const [transactions, balance] = await Promise.all([
+      getTrustTransactionsByAccount(c.env.DB, tenantId, accountId, limit, offset),
+      getTrustAccountBalance(c.env.DB, tenantId, accountId)
+    ]);
+
+    return c.json<ApiResponse>(ok({ account, transactions, balance }));
+  } catch (error) {
+    logger.error('Failed to list trust transactions', { tenantId, accountId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to retrieve trust transactions']), 500);
+  }
+});
+
+// RECORD a trust transaction — APPEND-ONLY (no update/delete routes exist)
+app.post('/api/legal/trust-accounts/:id/transactions', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const userId = c.get('userId' as never) as string;
+  const accountId = c.req.param('id');
+
+  try {
+    const account = await getTrustAccountById(c.env.DB, tenantId, accountId);
+    if (!account) return c.json<ApiResponse>(fail(['Trust account not found']), 404);
+    if (!account.isActive) {
+      return c.json<ApiResponse>(fail(['Cannot record transactions on a closed trust account']), 422);
+    }
+
+    const body = await c.req.json<{
+      transactionType: TrustTransactionType;
+      amountKobo: number;
+      description: string;
+      clientId?: string;
+      caseId?: string;
+      externalReference?: string;
+      transactionDate?: number;
+    }>();
+
+    // Validate transaction type
+    const validTypes: TrustTransactionType[] = ['DEPOSIT', 'DISBURSEMENT', 'BANK_CHARGES', 'INTEREST', 'TRANSFER_IN', 'TRANSFER_OUT'];
+    if (!validTypes.includes(body.transactionType)) {
+      return c.json<ApiResponse>(fail([`Invalid transactionType. Must be one of: ${validTypes.join(', ')}`]), 400);
+    }
+    if (!body.amountKobo || body.amountKobo <= 0) {
+      return c.json<ApiResponse>(fail(['amountKobo must be a positive integer']), 400);
+    }
+    if (!body.description?.trim()) {
+      return c.json<ApiResponse>(fail(['description is required']), 400);
+    }
+
+    const direction = TRUST_TRANSACTION_DIRECTION[body.transactionType];
+    const now = nowUTC();
+
+    // Generate unique reference for this tenant
+    const txnCount = await countTrustTransactionsByAccount(c.env.DB, tenantId, accountId);
+    const reference = generateTrustTransactionRef(txnCount + 1);
+
+    const transaction: TrustTransaction = {
+      id: generateId('ttx'),
+      tenantId,
+      accountId,
+      transactionType: body.transactionType,
+      direction,
+      amountKobo: Math.round(body.amountKobo),
+      description: body.description.trim(),
+      clientId: body.clientId ?? null,
+      caseId: body.caseId ?? null,
+      reference,
+      externalReference: body.externalReference ?? null,
+      recordedBy: userId,
+      transactionDate: body.transactionDate ?? now,
+      createdAt: now
+    };
+
+    await insertTrustTransaction(c.env.DB, transaction);
+
+    // Compute new balance for response
+    const balance = await getTrustAccountBalance(c.env.DB, tenantId, accountId);
+
+    await publishEvent(
+      createEvent(tenantId, 'legal.trust_transaction.recorded', {
+        accountId,
+        transactionId: transaction.id,
+        transactionType: transaction.transactionType,
+        direction,
+        amountKobo: transaction.amountKobo,
+        newBalanceKobo: balance.balanceKobo,
+        recordedBy: userId
+      }),
+      { EVENT_BUS_URL: c.env.EVENT_BUS_URL, EVENT_BUS_API_KEY: c.env.EVENT_BUS_API_KEY }
+    );
+
+    logger.info('Trust transaction recorded', {
+      tenantId,
+      accountId,
+      transactionId: transaction.id,
+      type: transaction.transactionType,
+      amountKobo: transaction.amountKobo,
+      direction
+    });
+
+    return c.json<ApiResponse>(ok({ transaction, balance }), 201);
+  } catch (error) {
+    logger.error('Failed to record trust transaction', { tenantId, accountId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to record trust transaction']), 500);
   }
 });
 
