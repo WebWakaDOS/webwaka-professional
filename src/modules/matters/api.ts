@@ -441,6 +441,16 @@ const app = new Hono<{ Bindings: MattersEnv }>();
 // Apply JWT auth to all routes
 app.use('/api/matters/*', professionalAuthMiddleware);
 
+// Extract role and userId from the authenticated user object into context
+app.use('/api/matters/*', async (c, next) => {
+  const user = c.get('user' as never) as { userId?: string; role?: string } | undefined;
+  if (user) {
+    if (user.role) c.set('role' as never, user.role as never);
+    if (user.userId) c.set('userId' as never, user.userId as never);
+  }
+  await next();
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/matters — List all matters for the tenant
 // ─────────────────────────────────────────────────────────────────────────────

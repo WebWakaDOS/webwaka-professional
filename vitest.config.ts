@@ -1,6 +1,11 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  resolve: {
+    // Allow vitest to resolve bare ESM imports (no .js extension) from
+    // @webwaka/core dist files, which use extensionless re-exports.
+    extensions: ['.ts', '.js', '.mjs', '.cjs', '.json'],
+  },
   test: {
     globals: true,
     environment: 'node',

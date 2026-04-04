@@ -59,6 +59,22 @@ import type {
 } from '../../../core/db/schema';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// RBAC HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+function canManageEvents(role: EventManagementRole): boolean {
+  return role === 'TENANT_ADMIN' || role === 'EVENT_MANAGER';
+}
+
+function isTenantAdmin(role: EventManagementRole): boolean {
+  return role === 'TENANT_ADMIN';
+}
+
+function canRegister(role: EventManagementRole): boolean {
+  return role === 'TENANT_ADMIN' || role === 'EVENT_MANAGER' || role === 'ATTENDEE';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ENVIRONMENT BINDINGS
 // Blueprint Reference: Part 2 — Cloudflare Workers bindings
 // ─────────────────────────────────────────────────────────────────────────────
@@ -159,6 +175,17 @@ app.use('*', async (c, next) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.use('/api/*', professionalAuthMiddleware);
+
+// Extract role and userId from the authenticated user object into context
+// (jwtAuthMiddleware sets c.get('user') but not c.get('role') / c.get('userId'))
+app.use('/api/*', async (c, next) => {
+  const user = c.get('user' as never) as { userId?: string; role?: string } | undefined;
+  if (user) {
+    if (user.role) c.set('role' as never, user.role as never);
+    if (user.userId) c.set('userId' as never, user.userId as never);
+  }
+  await next();
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HEALTH CHECK
