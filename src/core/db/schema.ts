@@ -515,6 +515,283 @@ export interface EventRegistration {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// RETAINER LEDGER
+// Blueprint Reference: Part 10.8 — Retainer Management
+// Tracks per-client retainer deposits, drawdowns, and refunds. Append-only.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type RetainerEntryType = 'DEPOSIT' | 'DRAWDOWN' | 'REFUND';
+
+export interface RetainerLedgerEntry {
+  id: string;
+  tenantId: string;
+  clientId: string;
+  caseId: string | null;
+  entryType: RetainerEntryType;
+  amountKobo: number;
+  description: string;
+  invoiceId: string | null;
+  recordedBy: string;
+  transactionDate: number;
+  createdAt: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MATTER TASKS — Task Delegation
+// Blueprint Reference: Part 10.8 — Task Delegation
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type TaskPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+export type TaskStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+
+export interface MatterTask {
+  id: string;
+  tenantId: string;
+  caseId: string;
+  title: string;
+  description: string | null;
+  assignedTo: string;
+  assignedBy: string;
+  priority: TaskPriority;
+  status: TaskStatus;
+  dueDate: number | null;
+  completedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MATTER EXPENSES — Expense Tracking
+// Blueprint Reference: Part 10.8 — Expense Tracking
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ExpenseCategory =
+  | 'FILING_FEE'
+  | 'TRAVEL'
+  | 'COURIER'
+  | 'PRINTING'
+  | 'EXPERT_WITNESS'
+  | 'COURT_FEES'
+  | 'SEARCH_FEES'
+  | 'OTHER';
+
+export interface MatterExpense {
+  id: string;
+  tenantId: string;
+  caseId: string;
+  category: ExpenseCategory;
+  description: string;
+  amountKobo: number;
+  currency: string;
+  receiptUrl: string | null;
+  recordedBy: string;
+  expenseDate: number;
+  invoiced: boolean;
+  invoiceId: string | null;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLIENT INTAKE FORMS
+// Blueprint Reference: Part 10.8 — Client Intake Forms
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface IntakeFormField {
+  id: string;
+  label: string;
+  type: 'TEXT' | 'EMAIL' | 'PHONE' | 'TEXTAREA' | 'SELECT' | 'DATE' | 'CHECKBOX';
+  required: boolean;
+  options?: string[];
+  placeholder?: string;
+}
+
+export interface ClientIntakeForm {
+  id: string;
+  tenantId: string;
+  title: string;
+  description: string | null;
+  fields: string;
+  isActive: boolean;
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+}
+
+export type IntakeSubmissionStatus = 'PENDING' | 'REVIEWED' | 'CONVERTED' | 'REJECTED';
+
+export interface ClientIntakeSubmission {
+  id: string;
+  tenantId: string;
+  formId: string;
+  submitterName: string;
+  submitterEmail: string | null;
+  submitterPhone: string | null;
+  responses: string;
+  status: IntakeSubmissionStatus;
+  reviewedBy: string | null;
+  reviewedAt: number | null;
+  clientId: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOCUMENT ANALYSES — AI Contract Analysis
+// Blueprint Reference: Part 10.8 — AI Contract Analysis
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type AnalysisStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+
+export interface DocumentAnalysis {
+  id: string;
+  tenantId: string;
+  documentId: string;
+  caseId: string;
+  analysisType: string;
+  status: AnalysisStatus;
+  summary: string | null;
+  riskyClauses: string | null;
+  keyTerms: string | null;
+  recommendations: string | null;
+  rawResponse: string | null;
+  analyzedBy: string;
+  completedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOCUMENT TEMPLATES — Document Assembly
+// Blueprint Reference: Part 10.8 — Document Assembly
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type TemplateType =
+  | 'NDA'
+  | 'EMPLOYMENT_AGREEMENT'
+  | 'RETAINER_AGREEMENT'
+  | 'POWER_OF_ATTORNEY'
+  | 'AFFIDAVIT'
+  | 'NOTICE'
+  | 'LETTER_DEMAND'
+  | 'SETTLEMENT_AGREEMENT'
+  | 'OTHER';
+
+export interface DocumentTemplate {
+  id: string;
+  tenantId: string;
+  title: string;
+  templateType: TemplateType;
+  content: string;
+  variables: string;
+  isActive: boolean;
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// E-SIGNATURE REQUESTS
+// Blueprint Reference: Part 10.8 — E-Signature Integration
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ESignatureStatus = 'PENDING' | 'SENT' | 'VIEWED' | 'SIGNED' | 'DECLINED' | 'EXPIRED';
+
+export interface ESignatureRequest {
+  id: string;
+  tenantId: string;
+  documentId: string;
+  caseId: string;
+  requestedBy: string;
+  signerName: string;
+  signerEmail: string;
+  signerPhone: string | null;
+  status: ESignatureStatus;
+  signedAt: number | null;
+  declinedAt: number | null;
+  expiresAt: number;
+  signatureData: string | null;
+  accessToken: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLIENT PORTAL TOKENS — Secure Client Portal
+// Blueprint Reference: Part 10.8 — Secure Client Portal
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ClientPortalToken {
+  id: string;
+  tenantId: string;
+  clientId: string;
+  token: string;
+  expiresAt: number;
+  lastUsedAt: number | null;
+  isRevoked: boolean;
+  createdAt: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLIENT MESSAGES — Secure Messaging
+// Blueprint Reference: Part 10.8 — Secure Messaging
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type MessageSenderType = 'ATTORNEY' | 'CLIENT' | 'PARALEGAL';
+
+export interface ClientMessage {
+  id: string;
+  tenantId: string;
+  caseId: string;
+  senderId: string;
+  senderType: MessageSenderType;
+  recipientId: string;
+  subject: string | null;
+  body: string;
+  isRead: boolean;
+  readAt: number | null;
+  parentMessageId: string | null;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTIFICATION SCHEDULES — Automated Reminders
+// Blueprint Reference: Part 10.8 — Automated Reminders
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type NotificationType =
+  | 'HEARING_REMINDER'
+  | 'INVOICE_OVERDUE'
+  | 'TASK_DUE'
+  | 'RETAINER_LOW'
+  | 'CERTIFICATE_EXPIRY'
+  | 'COURT_DATE';
+
+export type NotificationScheduleStatus = 'PENDING' | 'SENT' | 'FAILED' | 'CANCELLED';
+
+export interface NotificationSchedule {
+  id: string;
+  tenantId: string;
+  entityType: string;
+  entityId: string;
+  notificationType: NotificationType;
+  recipientPhone: string | null;
+  recipientEmail: string | null;
+  message: string;
+  scheduledFor: number;
+  sentAt: number | null;
+  status: NotificationScheduleStatus;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // D1 MIGRATION SQL
 // Blueprint Reference: Part 3 (Layer 3 — Edge-Native Data Architecture)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -793,4 +1070,269 @@ CREATE INDEX IF NOT EXISTS idx_trust_txn_client ON trust_transactions(tenantId, 
 CREATE INDEX IF NOT EXISTS idx_trust_txn_case ON trust_transactions(tenantId, caseId);
 CREATE INDEX IF NOT EXISTS idx_trust_txn_date ON trust_transactions(tenantId, transactionDate);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trust_txn_reference ON trust_transactions(tenantId, reference);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- RETAINER LEDGER (Migration 0003)
+-- Blueprint Reference: Part 10.8 — Retainer Management (append-only ledger)
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS retainer_ledger (
+  id TEXT PRIMARY KEY,
+  tenantId TEXT NOT NULL,
+  clientId TEXT NOT NULL REFERENCES legal_clients(id),
+  caseId TEXT REFERENCES legal_cases(id),
+  entryType TEXT NOT NULL CHECK (entryType IN ('DEPOSIT', 'DRAWDOWN', 'REFUND')),
+  amountKobo INTEGER NOT NULL CHECK (amountKobo > 0),
+  description TEXT NOT NULL,
+  invoiceId TEXT REFERENCES legal_invoices(id),
+  recordedBy TEXT NOT NULL,
+  transactionDate INTEGER NOT NULL,
+  createdAt INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_retainer_tenant ON retainer_ledger(tenantId);
+CREATE INDEX IF NOT EXISTS idx_retainer_client ON retainer_ledger(tenantId, clientId);
+CREATE INDEX IF NOT EXISTS idx_retainer_case ON retainer_ledger(tenantId, caseId);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- MATTER TASKS (Migration 0004)
+-- Blueprint Reference: Part 10.8 — Task Delegation
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS matter_tasks (
+  id TEXT PRIMARY KEY,
+  tenantId TEXT NOT NULL,
+  caseId TEXT NOT NULL REFERENCES legal_cases(id),
+  title TEXT NOT NULL,
+  description TEXT,
+  assignedTo TEXT NOT NULL,
+  assignedBy TEXT NOT NULL,
+  priority TEXT NOT NULL DEFAULT 'MEDIUM' CHECK (priority IN ('LOW', 'MEDIUM', 'HIGH', 'URGENT')),
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED')),
+  dueDate INTEGER,
+  completedAt INTEGER,
+  createdAt INTEGER NOT NULL,
+  updatedAt INTEGER NOT NULL,
+  deletedAt INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_tenant ON matter_tasks(tenantId);
+CREATE INDEX IF NOT EXISTS idx_tasks_case ON matter_tasks(tenantId, caseId);
+CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON matter_tasks(tenantId, assignedTo);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON matter_tasks(tenantId, status);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- MATTER EXPENSES (Migration 0005)
+-- Blueprint Reference: Part 10.8 — Expense Tracking
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS matter_expenses (
+  id TEXT PRIMARY KEY,
+  tenantId TEXT NOT NULL,
+  caseId TEXT NOT NULL REFERENCES legal_cases(id),
+  category TEXT NOT NULL CHECK (category IN ('FILING_FEE','TRAVEL','COURIER','PRINTING','EXPERT_WITNESS','COURT_FEES','SEARCH_FEES','OTHER')),
+  description TEXT NOT NULL,
+  amountKobo INTEGER NOT NULL CHECK (amountKobo > 0),
+  currency TEXT NOT NULL DEFAULT 'NGN',
+  receiptUrl TEXT,
+  recordedBy TEXT NOT NULL,
+  expenseDate INTEGER NOT NULL,
+  invoiced INTEGER NOT NULL DEFAULT 0,
+  invoiceId TEXT REFERENCES legal_invoices(id),
+  createdAt INTEGER NOT NULL,
+  updatedAt INTEGER NOT NULL,
+  deletedAt INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_expenses_tenant ON matter_expenses(tenantId);
+CREATE INDEX IF NOT EXISTS idx_expenses_case ON matter_expenses(tenantId, caseId);
+CREATE INDEX IF NOT EXISTS idx_expenses_invoiced ON matter_expenses(tenantId, invoiced);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CLIENT INTAKE FORMS (Migration 0006)
+-- Blueprint Reference: Part 10.8 — Client Intake Forms
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS client_intake_forms (
+  id TEXT PRIMARY KEY,
+  tenantId TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  fields TEXT NOT NULL DEFAULT '[]',
+  isActive INTEGER NOT NULL DEFAULT 1,
+  createdBy TEXT NOT NULL,
+  createdAt INTEGER NOT NULL,
+  updatedAt INTEGER NOT NULL,
+  deletedAt INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_intake_forms_tenant ON client_intake_forms(tenantId);
+
+CREATE TABLE IF NOT EXISTS client_intake_submissions (
+  id TEXT PRIMARY KEY,
+  tenantId TEXT NOT NULL,
+  formId TEXT NOT NULL REFERENCES client_intake_forms(id),
+  submitterName TEXT NOT NULL,
+  submitterEmail TEXT,
+  submitterPhone TEXT,
+  responses TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'REVIEWED', 'CONVERTED', 'REJECTED')),
+  reviewedBy TEXT,
+  reviewedAt INTEGER,
+  clientId TEXT REFERENCES legal_clients(id),
+  createdAt INTEGER NOT NULL,
+  updatedAt INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_intake_submissions_tenant ON client_intake_submissions(tenantId);
+CREATE INDEX IF NOT EXISTS idx_intake_submissions_form ON client_intake_submissions(formId);
+CREATE INDEX IF NOT EXISTS idx_intake_submissions_status ON client_intake_submissions(tenantId, status);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- DOCUMENT ANALYSES (Migration 0007)
+-- Blueprint Reference: Part 10.8 — AI Contract Analysis
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS document_analyses (
+  id TEXT PRIMARY KEY,
+  tenantId TEXT NOT NULL,
+  documentId TEXT NOT NULL REFERENCES legal_documents(id),
+  caseId TEXT NOT NULL REFERENCES legal_cases(id),
+  analysisType TEXT NOT NULL DEFAULT 'CONTRACT_REVIEW',
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED')),
+  summary TEXT,
+  riskyClauses TEXT,
+  keyTerms TEXT,
+  recommendations TEXT,
+  rawResponse TEXT,
+  analyzedBy TEXT NOT NULL,
+  completedAt INTEGER,
+  createdAt INTEGER NOT NULL,
+  updatedAt INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_analyses_tenant ON document_analyses(tenantId);
+CREATE INDEX IF NOT EXISTS idx_analyses_document ON document_analyses(documentId);
+CREATE INDEX IF NOT EXISTS idx_analyses_case ON document_analyses(tenantId, caseId);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- DOCUMENT TEMPLATES (Migration 0008)
+-- Blueprint Reference: Part 10.8 — Document Assembly
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS document_templates (
+  id TEXT PRIMARY KEY,
+  tenantId TEXT NOT NULL,
+  title TEXT NOT NULL,
+  templateType TEXT NOT NULL CHECK (templateType IN ('NDA','EMPLOYMENT_AGREEMENT','RETAINER_AGREEMENT','POWER_OF_ATTORNEY','AFFIDAVIT','NOTICE','LETTER_DEMAND','SETTLEMENT_AGREEMENT','OTHER')),
+  content TEXT NOT NULL,
+  variables TEXT NOT NULL DEFAULT '[]',
+  isActive INTEGER NOT NULL DEFAULT 1,
+  createdBy TEXT NOT NULL,
+  createdAt INTEGER NOT NULL,
+  updatedAt INTEGER NOT NULL,
+  deletedAt INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_templates_tenant ON document_templates(tenantId);
+CREATE INDEX IF NOT EXISTS idx_templates_type ON document_templates(tenantId, templateType);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- E-SIGNATURE REQUESTS (Migration 0009)
+-- Blueprint Reference: Part 10.8 — E-Signature Integration
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS esignature_requests (
+  id TEXT PRIMARY KEY,
+  tenantId TEXT NOT NULL,
+  documentId TEXT NOT NULL REFERENCES legal_documents(id),
+  caseId TEXT NOT NULL REFERENCES legal_cases(id),
+  requestedBy TEXT NOT NULL,
+  signerName TEXT NOT NULL,
+  signerEmail TEXT NOT NULL,
+  signerPhone TEXT,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','SENT','VIEWED','SIGNED','DECLINED','EXPIRED')),
+  signedAt INTEGER,
+  declinedAt INTEGER,
+  expiresAt INTEGER NOT NULL,
+  signatureData TEXT,
+  accessToken TEXT NOT NULL,
+  createdAt INTEGER NOT NULL,
+  updatedAt INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_esig_token ON esignature_requests(accessToken);
+CREATE INDEX IF NOT EXISTS idx_esig_tenant ON esignature_requests(tenantId);
+CREATE INDEX IF NOT EXISTS idx_esig_case ON esignature_requests(tenantId, caseId);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CLIENT PORTAL TOKENS (Migration 0010)
+-- Blueprint Reference: Part 10.8 — Secure Client Portal
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS client_portal_tokens (
+  id TEXT PRIMARY KEY,
+  tenantId TEXT NOT NULL,
+  clientId TEXT NOT NULL REFERENCES legal_clients(id),
+  token TEXT NOT NULL,
+  expiresAt INTEGER NOT NULL,
+  lastUsedAt INTEGER,
+  isRevoked INTEGER NOT NULL DEFAULT 0,
+  createdAt INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_portal_token ON client_portal_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_portal_client ON client_portal_tokens(tenantId, clientId);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CLIENT MESSAGES (Migration 0011)
+-- Blueprint Reference: Part 10.8 — Secure Messaging
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS client_messages (
+  id TEXT PRIMARY KEY,
+  tenantId TEXT NOT NULL,
+  caseId TEXT NOT NULL REFERENCES legal_cases(id),
+  senderId TEXT NOT NULL,
+  senderType TEXT NOT NULL CHECK (senderType IN ('ATTORNEY','CLIENT','PARALEGAL')),
+  recipientId TEXT NOT NULL,
+  subject TEXT,
+  body TEXT NOT NULL,
+  isRead INTEGER NOT NULL DEFAULT 0,
+  readAt INTEGER,
+  parentMessageId TEXT REFERENCES client_messages(id),
+  createdAt INTEGER NOT NULL,
+  updatedAt INTEGER NOT NULL,
+  deletedAt INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_tenant ON client_messages(tenantId);
+CREATE INDEX IF NOT EXISTS idx_messages_case ON client_messages(tenantId, caseId);
+CREATE INDEX IF NOT EXISTS idx_messages_recipient ON client_messages(tenantId, recipientId);
+CREATE INDEX IF NOT EXISTS idx_messages_unread ON client_messages(tenantId, recipientId, isRead);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- NOTIFICATION SCHEDULES (Migration 0012)
+-- Blueprint Reference: Part 10.8 — Automated Reminders
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS notification_schedules (
+  id TEXT PRIMARY KEY,
+  tenantId TEXT NOT NULL,
+  entityType TEXT NOT NULL CHECK (entityType IN ('CASE','HEARING','INVOICE','TASK','NBA_PROFILE')),
+  entityId TEXT NOT NULL,
+  notificationType TEXT NOT NULL CHECK (notificationType IN ('HEARING_REMINDER','INVOICE_OVERDUE','TASK_DUE','RETAINER_LOW','CERTIFICATE_EXPIRY','COURT_DATE')),
+  recipientPhone TEXT,
+  recipientEmail TEXT,
+  message TEXT NOT NULL,
+  scheduledFor INTEGER NOT NULL,
+  sentAt INTEGER,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','SENT','FAILED','CANCELLED')),
+  createdAt INTEGER NOT NULL,
+  updatedAt INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_notif_tenant ON notification_schedules(tenantId);
+CREATE INDEX IF NOT EXISTS idx_notif_scheduled ON notification_schedules(tenantId, scheduledFor, status);
+CREATE INDEX IF NOT EXISTS idx_notif_entity ON notification_schedules(tenantId, entityType, entityId);
 `;

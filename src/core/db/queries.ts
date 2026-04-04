@@ -16,7 +16,18 @@ import type {
   LegalDocument,
   NBAProfile,
   TrustAccount,
-  TrustTransaction
+  TrustTransaction,
+  RetainerLedgerEntry,
+  MatterTask,
+  MatterExpense,
+  ClientIntakeForm,
+  ClientIntakeSubmission,
+  DocumentAnalysis,
+  DocumentTemplate,
+  ESignatureRequest,
+  ClientPortalToken,
+  ClientMessage,
+  NotificationSchedule
 } from './schema';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -723,6 +734,1097 @@ export async function countTrustTransactionsByTenant(
     .bind(tenantId)
     .first<{ count: number }>();
   return row?.count ?? 0;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RETAINER LEDGER QUERIES
+// Blueprint Reference: Part 10.8 — Retainer Management
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function insertRetainerEntry(
+  db: D1Database,
+  entry: RetainerLedgerEntry
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO retainer_ledger
+       (id, tenantId, clientId, caseId, entryType, amountKobo, description, invoiceId, recordedBy, transactionDate, createdAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      entry.id, entry.tenantId, entry.clientId, entry.caseId,
+      entry.entryType, entry.amountKobo, entry.description,
+      entry.invoiceId, entry.recordedBy, entry.transactionDate, entry.createdAt
+    )
+    .run();
+}
+
+export async function getRetainerLedgerByClient(
+  db: D1Database,
+  tenantId: string,
+  clientId: string,
+  limit = 50,
+  offset = 0
+): Promise<RetainerLedgerEntry[]> {
+  const result = await db
+    .prepare(
+      `SELECT * FROM retainer_ledger
+       WHERE tenantId = ? AND clientId = ?
+       ORDER BY transactionDate DESC, createdAt DESC
+       LIMIT ? OFFSET ?`
+    )
+    .bind(tenantId, clientId, limit, offset)
+    .all<RetainerLedgerEntry>();
+  return result.results;
+}
+
+export interface RetainerBalance {
+  clientId: string;
+  totalDepositsKobo: number;
+  totalDrawdownsKobo: number;
+  totalRefundsKobo: number;
+  balanceKobo: number;
+  entryCount: number;
+}
+
+export async function getRetainerBalance(
+  db: D1Database,
+  tenantId: string,
+  clientId: string
+): Promise<RetainerBalance> {
+  const row = await db
+    .prepare(
+      `SELECT
+         clientId,
+         COALESCE(SUM(CASE WHEN entryType = 'DEPOSIT' THEN amountKobo ELSE 0 END), 0) AS totalDepositsKobo,
+         COALESCE(SUM(CASE WHEN entryType = 'DRAWDOWN' THEN amountKobo ELSE 0 END), 0) AS totalDrawdownsKobo,
+         COALESCE(SUM(CASE WHEN entryType = 'REFUND' THEN amountKobo ELSE 0 END), 0) AS totalRefundsKobo,
+         COUNT(*) AS entryCount
+       FROM retainer_ledger
+       WHERE tenantId = ? AND clientId = ?`
+    )
+    .bind(tenantId, clientId)
+    .first<{
+      clientId: string;
+      totalDepositsKobo: number;
+      totalDrawdownsKobo: number;
+      totalRefundsKobo: number;
+      entryCount: number;
+    }>();
+  const deposits = row?.totalDepositsKobo ?? 0;
+  const drawdowns = row?.totalDrawdownsKobo ?? 0;
+  const refunds = row?.totalRefundsKobo ?? 0;
+  return {
+    clientId,
+    totalDepositsKobo: deposits,
+    totalDrawdownsKobo: drawdowns,
+    totalRefundsKobo: refunds,
+    balanceKobo: deposits - drawdowns - refunds,
+    entryCount: row?.entryCount ?? 0
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MATTER TASKS QUERIES
+// Blueprint Reference: Part 10.8 — Task Delegation
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getTasksByCase(
+  db: D1Database,
+  tenantId: string,
+  caseId: string
+): Promise<MatterTask[]> {
+  const result = await db
+    .prepare(
+      `SELECT * FROM matter_tasks
+       WHERE tenantId = ? AND caseId = ? AND deletedAt IS NULL
+       ORDER BY priority DESC, dueDate ASC`
+    )
+    .bind(tenantId, caseId)
+    .all<MatterTask>();
+  return result.results;
+}
+
+export async function getTasksByAssignee(
+  db: D1Database,
+  tenantId: string,
+  assignedTo: string,
+  status?: string
+): Promise<MatterTask[]> {
+  let query = `SELECT * FROM matter_tasks WHERE tenantId = ? AND assignedTo = ? AND deletedAt IS NULL`;
+  const bindings: unknown[] = [tenantId, assignedTo];
+  if (status) { query += ` AND status = ?`; bindings.push(status); }
+  query += ` ORDER BY dueDate ASC`;
+  const result = await db.prepare(query).bind(...bindings).all<MatterTask>();
+  return result.results;
+}
+
+export async function getTasksByTenant(
+  db: D1Database,
+  tenantId: string,
+  filters: { status?: string; assignedTo?: string; caseId?: string } = {},
+  limit = 50,
+  offset = 0
+): Promise<MatterTask[]> {
+  let query = `SELECT * FROM matter_tasks WHERE tenantId = ? AND deletedAt IS NULL`;
+  const bindings: unknown[] = [tenantId];
+  if (filters.status) { query += ` AND status = ?`; bindings.push(filters.status); }
+  if (filters.assignedTo) { query += ` AND assignedTo = ?`; bindings.push(filters.assignedTo); }
+  if (filters.caseId) { query += ` AND caseId = ?`; bindings.push(filters.caseId); }
+  query += ` ORDER BY dueDate ASC LIMIT ? OFFSET ?`;
+  bindings.push(limit, offset);
+  const result = await db.prepare(query).bind(...bindings).all<MatterTask>();
+  return result.results;
+}
+
+export async function getTaskById(
+  db: D1Database,
+  tenantId: string,
+  id: string
+): Promise<MatterTask | null> {
+  return db
+    .prepare(`SELECT * FROM matter_tasks WHERE id = ? AND tenantId = ? AND deletedAt IS NULL`)
+    .bind(id, tenantId)
+    .first<MatterTask>();
+}
+
+export async function insertTask(
+  db: D1Database,
+  task: MatterTask
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO matter_tasks
+       (id, tenantId, caseId, title, description, assignedTo, assignedBy, priority, status, dueDate, completedAt, createdAt, updatedAt, deletedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      task.id, task.tenantId, task.caseId, task.title, task.description,
+      task.assignedTo, task.assignedBy, task.priority, task.status,
+      task.dueDate, task.completedAt, task.createdAt, task.updatedAt, task.deletedAt
+    )
+    .run();
+}
+
+export async function updateTaskStatus(
+  db: D1Database,
+  tenantId: string,
+  id: string,
+  status: string,
+  completedAt: number | null
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(
+      `UPDATE matter_tasks SET status = ?, completedAt = ?, updatedAt = ?
+       WHERE id = ? AND tenantId = ? AND deletedAt IS NULL`
+    )
+    .bind(status, completedAt, now, id, tenantId)
+    .run();
+}
+
+export async function updateTask(
+  db: D1Database,
+  tenantId: string,
+  id: string,
+  updates: Partial<Pick<MatterTask, 'title' | 'description' | 'assignedTo' | 'priority' | 'dueDate' | 'status'>>
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(
+      `UPDATE matter_tasks
+       SET title = COALESCE(?, title),
+           description = COALESCE(?, description),
+           assignedTo = COALESCE(?, assignedTo),
+           priority = COALESCE(?, priority),
+           dueDate = COALESCE(?, dueDate),
+           status = COALESCE(?, status),
+           updatedAt = ?
+       WHERE id = ? AND tenantId = ? AND deletedAt IS NULL`
+    )
+    .bind(
+      updates.title ?? null, updates.description ?? null, updates.assignedTo ?? null,
+      updates.priority ?? null, updates.dueDate ?? null, updates.status ?? null,
+      now, id, tenantId
+    )
+    .run();
+}
+
+export async function softDeleteTask(
+  db: D1Database,
+  tenantId: string,
+  id: string
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(`UPDATE matter_tasks SET deletedAt = ?, updatedAt = ? WHERE id = ? AND tenantId = ?`)
+    .bind(now, now, id, tenantId)
+    .run();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MATTER EXPENSES QUERIES
+// Blueprint Reference: Part 10.8 — Expense Tracking
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getExpensesByCase(
+  db: D1Database,
+  tenantId: string,
+  caseId: string
+): Promise<MatterExpense[]> {
+  const result = await db
+    .prepare(
+      `SELECT * FROM matter_expenses
+       WHERE tenantId = ? AND caseId = ? AND deletedAt IS NULL
+       ORDER BY expenseDate DESC`
+    )
+    .bind(tenantId, caseId)
+    .all<MatterExpenseRow>();
+  return result.results.map(rowToExpense);
+}
+
+export async function getExpensesByTenant(
+  db: D1Database,
+  tenantId: string,
+  filters: { caseId?: string; invoiced?: boolean } = {},
+  limit = 50,
+  offset = 0
+): Promise<MatterExpense[]> {
+  let query = `SELECT * FROM matter_expenses WHERE tenantId = ? AND deletedAt IS NULL`;
+  const bindings: unknown[] = [tenantId];
+  if (filters.caseId) { query += ` AND caseId = ?`; bindings.push(filters.caseId); }
+  if (filters.invoiced !== undefined) { query += ` AND invoiced = ?`; bindings.push(filters.invoiced ? 1 : 0); }
+  query += ` ORDER BY expenseDate DESC LIMIT ? OFFSET ?`;
+  bindings.push(limit, offset);
+  const result = await db.prepare(query).bind(...bindings).all<MatterExpenseRow>();
+  return result.results.map(rowToExpense);
+}
+
+type MatterExpenseRow = Omit<MatterExpense, 'invoiced'> & { invoiced: number };
+function rowToExpense(r: MatterExpenseRow): MatterExpense {
+  return { ...r, invoiced: r.invoiced === 1 };
+}
+
+export async function insertExpense(
+  db: D1Database,
+  expense: MatterExpense
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO matter_expenses
+       (id, tenantId, caseId, category, description, amountKobo, currency, receiptUrl, recordedBy, expenseDate, invoiced, invoiceId, createdAt, updatedAt, deletedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      expense.id, expense.tenantId, expense.caseId, expense.category,
+      expense.description, expense.amountKobo, expense.currency, expense.receiptUrl,
+      expense.recordedBy, expense.expenseDate, expense.invoiced ? 1 : 0,
+      expense.invoiceId, expense.createdAt, expense.updatedAt, expense.deletedAt
+    )
+    .run();
+}
+
+export async function softDeleteExpense(
+  db: D1Database,
+  tenantId: string,
+  id: string
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(`UPDATE matter_expenses SET deletedAt = ?, updatedAt = ? WHERE id = ? AND tenantId = ?`)
+    .bind(now, now, id, tenantId)
+    .run();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLIENT INTAKE FORMS QUERIES
+// Blueprint Reference: Part 10.8 — Client Intake Forms
+// ─────────────────────────────────────────────────────────────────────────────
+
+type IntakeFormRow = Omit<ClientIntakeForm, 'isActive'> & { isActive: number };
+
+export async function getIntakeFormsByTenant(
+  db: D1Database,
+  tenantId: string,
+  activeOnly = true
+): Promise<ClientIntakeForm[]> {
+  let query = `SELECT * FROM client_intake_forms WHERE tenantId = ? AND deletedAt IS NULL`;
+  const bindings: unknown[] = [tenantId];
+  if (activeOnly) { query += ` AND isActive = 1`; }
+  query += ` ORDER BY createdAt DESC`;
+  const result = await db.prepare(query).bind(...bindings).all<IntakeFormRow>();
+  return result.results.map(r => ({ ...r, isActive: r.isActive === 1 }));
+}
+
+export async function getIntakeFormById(
+  db: D1Database,
+  tenantId: string,
+  id: string
+): Promise<ClientIntakeForm | null> {
+  const row = await db
+    .prepare(`SELECT * FROM client_intake_forms WHERE id = ? AND tenantId = ? AND deletedAt IS NULL`)
+    .bind(id, tenantId)
+    .first<IntakeFormRow>();
+  if (!row) return null;
+  return { ...row, isActive: row.isActive === 1 };
+}
+
+export async function insertIntakeForm(
+  db: D1Database,
+  form: ClientIntakeForm
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO client_intake_forms
+       (id, tenantId, title, description, fields, isActive, createdBy, createdAt, updatedAt, deletedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      form.id, form.tenantId, form.title, form.description, form.fields,
+      form.isActive ? 1 : 0, form.createdBy, form.createdAt, form.updatedAt, form.deletedAt
+    )
+    .run();
+}
+
+export async function updateIntakeForm(
+  db: D1Database,
+  tenantId: string,
+  id: string,
+  updates: Partial<Pick<ClientIntakeForm, 'title' | 'description' | 'fields' | 'isActive'>>
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(
+      `UPDATE client_intake_forms
+       SET title = COALESCE(?, title),
+           description = COALESCE(?, description),
+           fields = COALESCE(?, fields),
+           isActive = COALESCE(?, isActive),
+           updatedAt = ?
+       WHERE id = ? AND tenantId = ? AND deletedAt IS NULL`
+    )
+    .bind(
+      updates.title ?? null, updates.description ?? null, updates.fields ?? null,
+      updates.isActive !== undefined ? (updates.isActive ? 1 : 0) : null,
+      now, id, tenantId
+    )
+    .run();
+}
+
+export async function softDeleteIntakeForm(
+  db: D1Database,
+  tenantId: string,
+  id: string
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(`UPDATE client_intake_forms SET deletedAt = ?, updatedAt = ? WHERE id = ? AND tenantId = ?`)
+    .bind(now, now, id, tenantId)
+    .run();
+}
+
+export async function getIntakeSubmissionsByTenant(
+  db: D1Database,
+  tenantId: string,
+  filters: { formId?: string; status?: string } = {},
+  limit = 50,
+  offset = 0
+): Promise<ClientIntakeSubmission[]> {
+  let query = `SELECT * FROM client_intake_submissions WHERE tenantId = ?`;
+  const bindings: unknown[] = [tenantId];
+  if (filters.formId) { query += ` AND formId = ?`; bindings.push(filters.formId); }
+  if (filters.status) { query += ` AND status = ?`; bindings.push(filters.status); }
+  query += ` ORDER BY createdAt DESC LIMIT ? OFFSET ?`;
+  bindings.push(limit, offset);
+  const result = await db.prepare(query).bind(...bindings).all<ClientIntakeSubmission>();
+  return result.results;
+}
+
+export async function getIntakeSubmissionById(
+  db: D1Database,
+  tenantId: string,
+  id: string
+): Promise<ClientIntakeSubmission | null> {
+  return db
+    .prepare(`SELECT * FROM client_intake_submissions WHERE id = ? AND tenantId = ?`)
+    .bind(id, tenantId)
+    .first<ClientIntakeSubmission>();
+}
+
+export async function insertIntakeSubmission(
+  db: D1Database,
+  submission: ClientIntakeSubmission
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO client_intake_submissions
+       (id, tenantId, formId, submitterName, submitterEmail, submitterPhone, responses, status, reviewedBy, reviewedAt, clientId, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      submission.id, submission.tenantId, submission.formId, submission.submitterName,
+      submission.submitterEmail, submission.submitterPhone, submission.responses,
+      submission.status, submission.reviewedBy, submission.reviewedAt, submission.clientId,
+      submission.createdAt, submission.updatedAt
+    )
+    .run();
+}
+
+export async function updateIntakeSubmissionStatus(
+  db: D1Database,
+  tenantId: string,
+  id: string,
+  status: string,
+  reviewedBy: string,
+  clientId?: string
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(
+      `UPDATE client_intake_submissions
+       SET status = ?, reviewedBy = ?, reviewedAt = ?, clientId = COALESCE(?, clientId), updatedAt = ?
+       WHERE id = ? AND tenantId = ?`
+    )
+    .bind(status, reviewedBy, now, clientId ?? null, now, id, tenantId)
+    .run();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOCUMENT ANALYSES QUERIES
+// Blueprint Reference: Part 10.8 — AI Contract Analysis
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getAnalysesByDocument(
+  db: D1Database,
+  tenantId: string,
+  documentId: string
+): Promise<DocumentAnalysis[]> {
+  const result = await db
+    .prepare(
+      `SELECT * FROM document_analyses
+       WHERE tenantId = ? AND documentId = ?
+       ORDER BY createdAt DESC`
+    )
+    .bind(tenantId, documentId)
+    .all<DocumentAnalysis>();
+  return result.results;
+}
+
+export async function getAnalysisByCase(
+  db: D1Database,
+  tenantId: string,
+  caseId: string
+): Promise<DocumentAnalysis[]> {
+  const result = await db
+    .prepare(
+      `SELECT * FROM document_analyses
+       WHERE tenantId = ? AND caseId = ?
+       ORDER BY createdAt DESC`
+    )
+    .bind(tenantId, caseId)
+    .all<DocumentAnalysis>();
+  return result.results;
+}
+
+export async function getAnalysisById(
+  db: D1Database,
+  tenantId: string,
+  id: string
+): Promise<DocumentAnalysis | null> {
+  return db
+    .prepare(`SELECT * FROM document_analyses WHERE id = ? AND tenantId = ?`)
+    .bind(id, tenantId)
+    .first<DocumentAnalysis>();
+}
+
+export async function insertDocumentAnalysis(
+  db: D1Database,
+  analysis: DocumentAnalysis
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO document_analyses
+       (id, tenantId, documentId, caseId, analysisType, status, summary, riskyClauses, keyTerms, recommendations, rawResponse, analyzedBy, completedAt, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      analysis.id, analysis.tenantId, analysis.documentId, analysis.caseId,
+      analysis.analysisType, analysis.status, analysis.summary, analysis.riskyClauses,
+      analysis.keyTerms, analysis.recommendations, analysis.rawResponse, analysis.analyzedBy,
+      analysis.completedAt, analysis.createdAt, analysis.updatedAt
+    )
+    .run();
+}
+
+export async function updateDocumentAnalysis(
+  db: D1Database,
+  tenantId: string,
+  id: string,
+  updates: Partial<Pick<DocumentAnalysis, 'status' | 'summary' | 'riskyClauses' | 'keyTerms' | 'recommendations' | 'rawResponse' | 'completedAt'>>
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(
+      `UPDATE document_analyses
+       SET status = COALESCE(?, status),
+           summary = COALESCE(?, summary),
+           riskyClauses = COALESCE(?, riskyClauses),
+           keyTerms = COALESCE(?, keyTerms),
+           recommendations = COALESCE(?, recommendations),
+           rawResponse = COALESCE(?, rawResponse),
+           completedAt = COALESCE(?, completedAt),
+           updatedAt = ?
+       WHERE id = ? AND tenantId = ?`
+    )
+    .bind(
+      updates.status ?? null, updates.summary ?? null, updates.riskyClauses ?? null,
+      updates.keyTerms ?? null, updates.recommendations ?? null, updates.rawResponse ?? null,
+      updates.completedAt ?? null, now, id, tenantId
+    )
+    .run();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOCUMENT TEMPLATES QUERIES
+// Blueprint Reference: Part 10.8 — Document Assembly
+// ─────────────────────────────────────────────────────────────────────────────
+
+type DocTemplateRow = Omit<DocumentTemplate, 'isActive'> & { isActive: number };
+
+export async function getTemplatesByTenant(
+  db: D1Database,
+  tenantId: string,
+  activeOnly = true
+): Promise<DocumentTemplate[]> {
+  let query = `SELECT * FROM document_templates WHERE tenantId = ? AND deletedAt IS NULL`;
+  const bindings: unknown[] = [tenantId];
+  if (activeOnly) { query += ` AND isActive = 1`; }
+  query += ` ORDER BY templateType ASC, title ASC`;
+  const result = await db.prepare(query).bind(...bindings).all<DocTemplateRow>();
+  return result.results.map(r => ({ ...r, isActive: r.isActive === 1 }));
+}
+
+export async function getTemplateById(
+  db: D1Database,
+  tenantId: string,
+  id: string
+): Promise<DocumentTemplate | null> {
+  const row = await db
+    .prepare(`SELECT * FROM document_templates WHERE id = ? AND tenantId = ? AND deletedAt IS NULL`)
+    .bind(id, tenantId)
+    .first<DocTemplateRow>();
+  if (!row) return null;
+  return { ...row, isActive: row.isActive === 1 };
+}
+
+export async function insertDocumentTemplate(
+  db: D1Database,
+  template: DocumentTemplate
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO document_templates
+       (id, tenantId, title, templateType, content, variables, isActive, createdBy, createdAt, updatedAt, deletedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      template.id, template.tenantId, template.title, template.templateType,
+      template.content, template.variables, template.isActive ? 1 : 0,
+      template.createdBy, template.createdAt, template.updatedAt, template.deletedAt
+    )
+    .run();
+}
+
+export async function updateDocumentTemplate(
+  db: D1Database,
+  tenantId: string,
+  id: string,
+  updates: Partial<Pick<DocumentTemplate, 'title' | 'content' | 'variables' | 'isActive'>>
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(
+      `UPDATE document_templates
+       SET title = COALESCE(?, title),
+           content = COALESCE(?, content),
+           variables = COALESCE(?, variables),
+           isActive = COALESCE(?, isActive),
+           updatedAt = ?
+       WHERE id = ? AND tenantId = ? AND deletedAt IS NULL`
+    )
+    .bind(
+      updates.title ?? null, updates.content ?? null, updates.variables ?? null,
+      updates.isActive !== undefined ? (updates.isActive ? 1 : 0) : null,
+      now, id, tenantId
+    )
+    .run();
+}
+
+export async function softDeleteTemplate(
+  db: D1Database,
+  tenantId: string,
+  id: string
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(`UPDATE document_templates SET deletedAt = ?, updatedAt = ? WHERE id = ? AND tenantId = ?`)
+    .bind(now, now, id, tenantId)
+    .run();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// E-SIGNATURE REQUESTS QUERIES
+// Blueprint Reference: Part 10.8 — E-Signature Integration
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getESignaturesByCase(
+  db: D1Database,
+  tenantId: string,
+  caseId: string
+): Promise<ESignatureRequest[]> {
+  const result = await db
+    .prepare(
+      `SELECT * FROM esignature_requests WHERE tenantId = ? AND caseId = ? ORDER BY createdAt DESC`
+    )
+    .bind(tenantId, caseId)
+    .all<ESignatureRequest>();
+  return result.results;
+}
+
+export async function getESignatureById(
+  db: D1Database,
+  tenantId: string,
+  id: string
+): Promise<ESignatureRequest | null> {
+  return db
+    .prepare(`SELECT * FROM esignature_requests WHERE id = ? AND tenantId = ?`)
+    .bind(id, tenantId)
+    .first<ESignatureRequest>();
+}
+
+export async function getESignatureByToken(
+  db: D1Database,
+  token: string
+): Promise<ESignatureRequest | null> {
+  return db
+    .prepare(`SELECT * FROM esignature_requests WHERE accessToken = ?`)
+    .bind(token)
+    .first<ESignatureRequest>();
+}
+
+export async function insertESignatureRequest(
+  db: D1Database,
+  request: ESignatureRequest
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO esignature_requests
+       (id, tenantId, documentId, caseId, requestedBy, signerName, signerEmail, signerPhone, status, signedAt, declinedAt, expiresAt, signatureData, accessToken, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      request.id, request.tenantId, request.documentId, request.caseId,
+      request.requestedBy, request.signerName, request.signerEmail, request.signerPhone,
+      request.status, request.signedAt, request.declinedAt, request.expiresAt,
+      request.signatureData, request.accessToken, request.createdAt, request.updatedAt
+    )
+    .run();
+}
+
+export async function updateESignatureStatus(
+  db: D1Database,
+  id: string,
+  status: string,
+  signedAt?: number,
+  declinedAt?: number,
+  signatureData?: string
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(
+      `UPDATE esignature_requests
+       SET status = ?, signedAt = COALESCE(?, signedAt), declinedAt = COALESCE(?, declinedAt),
+           signatureData = COALESCE(?, signatureData), updatedAt = ?
+       WHERE id = ?`
+    )
+    .bind(status, signedAt ?? null, declinedAt ?? null, signatureData ?? null, now, id)
+    .run();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLIENT PORTAL TOKEN QUERIES
+// Blueprint Reference: Part 10.8 — Secure Client Portal
+// ─────────────────────────────────────────────────────────────────────────────
+
+type PortalTokenRow = Omit<ClientPortalToken, 'isRevoked'> & { isRevoked: number };
+
+export async function insertPortalToken(
+  db: D1Database,
+  token: ClientPortalToken
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO client_portal_tokens
+       (id, tenantId, clientId, token, expiresAt, lastUsedAt, isRevoked, createdAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      token.id, token.tenantId, token.clientId, token.token,
+      token.expiresAt, token.lastUsedAt, token.isRevoked ? 1 : 0, token.createdAt
+    )
+    .run();
+}
+
+export async function getPortalTokenByValue(
+  db: D1Database,
+  token: string
+): Promise<ClientPortalToken | null> {
+  const row = await db
+    .prepare(`SELECT * FROM client_portal_tokens WHERE token = ? AND isRevoked = 0`)
+    .bind(token)
+    .first<PortalTokenRow>();
+  if (!row) return null;
+  return { ...row, isRevoked: row.isRevoked === 1 };
+}
+
+export async function touchPortalToken(
+  db: D1Database,
+  id: string
+): Promise<void> {
+  await db
+    .prepare(`UPDATE client_portal_tokens SET lastUsedAt = ? WHERE id = ?`)
+    .bind(Date.now(), id)
+    .run();
+}
+
+export async function revokePortalToken(
+  db: D1Database,
+  tenantId: string,
+  clientId: string
+): Promise<void> {
+  await db
+    .prepare(`UPDATE client_portal_tokens SET isRevoked = 1 WHERE tenantId = ? AND clientId = ?`)
+    .bind(tenantId, clientId)
+    .run();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLIENT MESSAGES QUERIES
+// Blueprint Reference: Part 10.8 — Secure Messaging
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getMessagesByCase(
+  db: D1Database,
+  tenantId: string,
+  caseId: string,
+  limit = 100,
+  offset = 0
+): Promise<ClientMessage[]> {
+  const result = await db
+    .prepare(
+      `SELECT * FROM client_messages
+       WHERE tenantId = ? AND caseId = ? AND deletedAt IS NULL
+       ORDER BY createdAt ASC
+       LIMIT ? OFFSET ?`
+    )
+    .bind(tenantId, caseId, limit, offset)
+    .all<ClientMessageRow>();
+  return result.results.map(rowToMessage);
+}
+
+export async function getUnreadMessageCount(
+  db: D1Database,
+  tenantId: string,
+  recipientId: string
+): Promise<number> {
+  const row = await db
+    .prepare(`SELECT COUNT(*) as count FROM client_messages WHERE tenantId = ? AND recipientId = ? AND isRead = 0 AND deletedAt IS NULL`)
+    .bind(tenantId, recipientId)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
+}
+
+type ClientMessageRow = Omit<ClientMessage, 'isRead'> & { isRead: number };
+function rowToMessage(r: ClientMessageRow): ClientMessage {
+  return { ...r, isRead: r.isRead === 1 };
+}
+
+export async function insertMessage(
+  db: D1Database,
+  message: ClientMessage
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO client_messages
+       (id, tenantId, caseId, senderId, senderType, recipientId, subject, body, isRead, readAt, parentMessageId, createdAt, updatedAt, deletedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      message.id, message.tenantId, message.caseId, message.senderId, message.senderType,
+      message.recipientId, message.subject, message.body,
+      message.isRead ? 1 : 0, message.readAt, message.parentMessageId,
+      message.createdAt, message.updatedAt, message.deletedAt
+    )
+    .run();
+}
+
+export async function markMessageRead(
+  db: D1Database,
+  tenantId: string,
+  id: string
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(`UPDATE client_messages SET isRead = 1, readAt = ?, updatedAt = ? WHERE id = ? AND tenantId = ?`)
+    .bind(now, now, id, tenantId)
+    .run();
+}
+
+export async function softDeleteMessage(
+  db: D1Database,
+  tenantId: string,
+  id: string
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(`UPDATE client_messages SET deletedAt = ?, updatedAt = ? WHERE id = ? AND tenantId = ?`)
+    .bind(now, now, id, tenantId)
+    .run();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTIFICATION SCHEDULES QUERIES
+// Blueprint Reference: Part 10.8 — Automated Reminders
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getPendingNotifications(
+  db: D1Database,
+  tenantId: string,
+  before: number
+): Promise<NotificationSchedule[]> {
+  const result = await db
+    .prepare(
+      `SELECT * FROM notification_schedules
+       WHERE tenantId = ? AND status = 'PENDING' AND scheduledFor <= ?
+       ORDER BY scheduledFor ASC
+       LIMIT 100`
+    )
+    .bind(tenantId, before)
+    .all<NotificationSchedule>();
+  return result.results;
+}
+
+export async function getScheduledNotificationsByEntity(
+  db: D1Database,
+  tenantId: string,
+  entityType: string,
+  entityId: string
+): Promise<NotificationSchedule[]> {
+  const result = await db
+    .prepare(
+      `SELECT * FROM notification_schedules
+       WHERE tenantId = ? AND entityType = ? AND entityId = ?
+       ORDER BY scheduledFor ASC`
+    )
+    .bind(tenantId, entityType, entityId)
+    .all<NotificationSchedule>();
+  return result.results;
+}
+
+export async function insertNotificationSchedule(
+  db: D1Database,
+  schedule: NotificationSchedule
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO notification_schedules
+       (id, tenantId, entityType, entityId, notificationType, recipientPhone, recipientEmail, message, scheduledFor, sentAt, status, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      schedule.id, schedule.tenantId, schedule.entityType, schedule.entityId,
+      schedule.notificationType, schedule.recipientPhone, schedule.recipientEmail,
+      schedule.message, schedule.scheduledFor, schedule.sentAt, schedule.status,
+      schedule.createdAt, schedule.updatedAt
+    )
+    .run();
+}
+
+export async function updateNotificationStatus(
+  db: D1Database,
+  id: string,
+  status: string,
+  sentAt?: number
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(`UPDATE notification_schedules SET status = ?, sentAt = COALESCE(?, sentAt), updatedAt = ? WHERE id = ?`)
+    .bind(status, sentAt ?? null, now, id)
+    .run();
+}
+
+export async function cancelNotificationsByEntity(
+  db: D1Database,
+  tenantId: string,
+  entityType: string,
+  entityId: string
+): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(`UPDATE notification_schedules SET status = 'CANCELLED', updatedAt = ? WHERE tenantId = ? AND entityType = ? AND entityId = ? AND status = 'PENDING'`)
+    .bind(now, tenantId, entityType, entityId)
+    .run();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PERFORMANCE ANALYTICS QUERIES
+// Blueprint Reference: Part 10.8 — Performance Analytics
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface AttorneyAnalytics {
+  attorneyId: string;
+  totalMinutes: number;
+  billableMinutes: number;
+  totalBilledKobo: number;
+  caseCount: number;
+}
+
+export async function getAttorneyAnalytics(
+  db: D1Database,
+  tenantId: string,
+  startDate: number,
+  endDate: number
+): Promise<AttorneyAnalytics[]> {
+  const result = await db
+    .prepare(
+      `SELECT
+         te.attorneyId,
+         COALESCE(SUM(te.durationMinutes), 0) AS totalMinutes,
+         COALESCE(SUM(CASE WHEN te.invoiced = 1 THEN te.durationMinutes ELSE 0 END), 0) AS billableMinutes,
+         COALESCE(SUM(CASE WHEN te.invoiced = 1 THEN te.amountKobo ELSE 0 END), 0) AS totalBilledKobo,
+         COUNT(DISTINCT te.caseId) AS caseCount
+       FROM legal_time_entries te
+       WHERE te.tenantId = ? AND te.workDate BETWEEN ? AND ? AND te.deletedAt IS NULL
+       GROUP BY te.attorneyId`
+    )
+    .bind(tenantId, startDate, endDate)
+    .all<AttorneyAnalytics>();
+  return result.results;
+}
+
+export interface RevenueStats {
+  period: string;
+  invoicedKobo: number;
+  collectedKobo: number;
+  outstandingKobo: number;
+  invoiceCount: number;
+}
+
+export async function getMonthlyRevenue(
+  db: D1Database,
+  tenantId: string,
+  months = 6
+): Promise<RevenueStats[]> {
+  const result = await db
+    .prepare(
+      `SELECT
+         strftime('%Y-%m', datetime(createdAt/1000, 'unixepoch')) AS period,
+         COALESCE(SUM(totalKobo), 0) AS invoicedKobo,
+         COALESCE(SUM(CASE WHEN status = 'PAID' THEN totalKobo ELSE 0 END), 0) AS collectedKobo,
+         COALESCE(SUM(CASE WHEN status IN ('SENT', 'OVERDUE') THEN totalKobo ELSE 0 END), 0) AS outstandingKobo,
+         COUNT(*) AS invoiceCount
+       FROM legal_invoices
+       WHERE tenantId = ? AND deletedAt IS NULL
+       GROUP BY period
+       ORDER BY period DESC
+       LIMIT ?`
+    )
+    .bind(tenantId, months)
+    .all<RevenueStats>();
+  return result.results;
+}
+
+export interface ConflictCheckResult {
+  clientId: string;
+  fullName: string;
+  phone: string;
+  email: string | null;
+  caseCount: number;
+  activeCase: boolean;
+}
+
+export async function checkConflictOfInterest(
+  db: D1Database,
+  tenantId: string,
+  fullName: string,
+  phone: string,
+  email: string | null
+): Promise<ConflictCheckResult[]> {
+  let query = `
+    SELECT
+      c.id AS clientId,
+      c.fullName,
+      c.phone,
+      c.email,
+      COUNT(DISTINCT ca.id) AS caseCount,
+      MAX(CASE WHEN ca.status IN ('INTAKE','ACTIVE','PENDING_COURT','ADJOURNED') THEN 1 ELSE 0 END) AS activeCase
+    FROM legal_clients c
+    LEFT JOIN legal_cases ca ON ca.clientId = c.id AND ca.deletedAt IS NULL
+    WHERE c.tenantId = ? AND c.deletedAt IS NULL
+    AND (LOWER(c.fullName) LIKE LOWER(?)`;
+  const bindings: unknown[] = [tenantId, `%${fullName}%`];
+  if (phone) { query += ` OR c.phone LIKE ?`; bindings.push(`%${phone.slice(-8)}`); }
+  if (email) { query += ` OR LOWER(c.email) = LOWER(?)`; bindings.push(email); }
+  query += `) GROUP BY c.id`;
+  const result = await db.prepare(query).bind(...bindings).all<ConflictCheckResult & { activeCase: number }>();
+  return result.results.map(r => ({ ...r, activeCase: r.activeCase === 1 }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPLIANCE REPORTING QUERIES
+// Blueprint Reference: Part 10.8 — Compliance Reporting (NBA)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface NBAComplianceReport {
+  tenantId: string;
+  reportDate: number;
+  totalAttorneys: number;
+  verifiedAttorneys: number;
+  expiringCertificates: number;
+  totalTrustAccounts: number;
+  totalTrustBalanceKobo: number;
+  totalCases: number;
+  activeCases: number;
+  closedCases: number;
+}
+
+export async function generateNBAComplianceReport(
+  db: D1Database,
+  tenantId: string
+): Promise<NBAComplianceReport> {
+  const now = Date.now();
+  const thirtyDaysFromNow = now + 30 * 24 * 60 * 60 * 1000;
+
+  const [attorneys, expiringCerts, trustAccounts, trustBalance, cases] = await Promise.all([
+    db.prepare(`SELECT COUNT(*) as total, SUM(CASE WHEN isVerified = 1 THEN 1 ELSE 0 END) as verified FROM nba_profiles WHERE tenantId = ? AND deletedAt IS NULL`).bind(tenantId).first<{ total: number; verified: number }>(),
+    db.prepare(`SELECT COUNT(*) as count FROM nba_profiles WHERE tenantId = ? AND practicingCertificateExpiry BETWEEN ? AND ? AND deletedAt IS NULL`).bind(tenantId, now, thirtyDaysFromNow).first<{ count: number }>(),
+    db.prepare(`SELECT COUNT(*) as count FROM trust_accounts WHERE tenantId = ? AND isActive = 1`).bind(tenantId).first<{ count: number }>(),
+    db.prepare(`SELECT COALESCE(SUM(CASE WHEN direction = 'CREDIT' THEN amountKobo ELSE -amountKobo END), 0) AS balance FROM trust_transactions WHERE tenantId = ?`).bind(tenantId).first<{ balance: number }>(),
+    db.prepare(`SELECT COUNT(*) as total, SUM(CASE WHEN status IN ('INTAKE','ACTIVE','PENDING_COURT','ADJOURNED') THEN 1 ELSE 0 END) as active, SUM(CASE WHEN status IN ('CLOSED','SETTLED','ARCHIVED') THEN 1 ELSE 0 END) as closed FROM legal_cases WHERE tenantId = ? AND deletedAt IS NULL`).bind(tenantId).first<{ total: number; active: number; closed: number }>()
+  ]);
+
+  return {
+    tenantId,
+    reportDate: now,
+    totalAttorneys: attorneys?.total ?? 0,
+    verifiedAttorneys: attorneys?.verified ?? 0,
+    expiringCertificates: expiringCerts?.count ?? 0,
+    totalTrustAccounts: trustAccounts?.count ?? 0,
+    totalTrustBalanceKobo: trustBalance?.balance ?? 0,
+    totalCases: cases?.total ?? 0,
+    activeCases: cases?.active ?? 0,
+    closedCases: cases?.closed ?? 0
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

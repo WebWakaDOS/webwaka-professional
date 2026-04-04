@@ -260,7 +260,10 @@ function getStatusColor(status: string): string {
 // TYPES
 // ─────────────────────────────────────────────────────────────────────────────
 
-type View = 'dashboard' | 'clients' | 'cases' | 'time' | 'invoices' | 'nba' | 'trust';
+type View =
+  | 'dashboard' | 'clients' | 'cases' | 'time' | 'invoices'
+  | 'nba' | 'trust' | 'tasks' | 'expenses' | 'intake'
+  | 'templates' | 'messages' | 'analytics' | 'compliance';
 
 interface DashboardStats {
   totalClients: number;
@@ -393,6 +396,101 @@ interface TrustTxn {
   createdAt: number;
 }
 
+interface MatterTask {
+  id: string;
+  caseId: string;
+  title: string;
+  description: string | null;
+  assignedTo: string;
+  assignedBy: string;
+  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+  status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+  dueDate: number | null;
+  completedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface MatterExpense {
+  id: string;
+  caseId: string;
+  category: string;
+  description: string;
+  amountKobo: number;
+  currency: string;
+  receiptUrl: string | null;
+  recordedBy: string;
+  expenseDate: number;
+  invoiced: boolean;
+  createdAt: number;
+}
+
+interface IntakeForm {
+  id: string;
+  title: string;
+  description: string | null;
+  fields: unknown[];
+  isActive: boolean;
+  createdAt: number;
+}
+
+interface IntakeSubmission {
+  id: string;
+  formId: string;
+  submitterName: string;
+  submitterEmail: string | null;
+  submitterPhone: string | null;
+  responses: string;
+  status: string;
+  createdAt: number;
+}
+
+interface DocTemplate {
+  id: string;
+  title: string;
+  templateType: string;
+  content: string;
+  variables: string[];
+  isActive: boolean;
+  createdAt: number;
+}
+
+interface ClientMessage {
+  id: string;
+  caseId: string;
+  senderId: string;
+  senderType: string;
+  recipientId: string;
+  subject: string | null;
+  body: string;
+  isRead: boolean;
+  createdAt: number;
+}
+
+interface AttorneyAnalytic {
+  attorneyId: string;
+  totalMinutes: number;
+  billableMinutes: number;
+  totalBilledKobo: number;
+  totalBilledNaira: number;
+  billableHours: string;
+  totalHours: string;
+  utilizationRate: string;
+  caseCount: number;
+}
+
+interface RevenueMonth {
+  period: string;
+  invoicedKobo: number;
+  collectedKobo: number;
+  outstandingKobo: number;
+  invoicedNaira: number;
+  collectedNaira: number;
+  outstandingNaira: number;
+  collectionRate: string;
+  invoiceCount: number;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -431,6 +529,38 @@ export const LegalPracticeUI: React.FC<LegalPracticeUIProps> = ({
   const [selectedTrustAccount, setSelectedTrustAccount] = useState<TrustAccountWithBalance | null>(null);
   const [trustTransactions, setTrustTransactions] = useState<TrustTxn[]>([]);
   const [trustBalance, setTrustBalance] = useState<TrustBalance | null>(null);
+
+  // New feature state
+  const [tasks, setTasks] = useState<MatterTask[]>([]);
+  const [expenses, setExpenses] = useState<MatterExpense[]>([]);
+  const [intakeForms, setIntakeForms] = useState<IntakeForm[]>([]);
+  const [intakeSubmissions, setIntakeSubmissions] = useState<IntakeSubmission[]>([]);
+  const [templates, setTemplates] = useState<DocTemplate[]>([]);
+  const [messages, setMessages] = useState<ClientMessage[]>([]);
+  const [attorneyAnalytics, setAttorneyAnalytics] = useState<AttorneyAnalytic[]>([]);
+  const [revenueData, setRevenueData] = useState<RevenueMonth[]>([]);
+  const [complianceReport, setComplianceReport] = useState<Record<string, unknown> | null>(null);
+  const [assembledDoc, setAssembledDoc] = useState<string | null>(null);
+  const [selectedTemplate, setSelectedTemplate] = useState<DocTemplate | null>(null);
+  const [templateVars, setTemplateVars] = useState<Record<string, string>>({});
+  const [unreadMessages, setUnreadMessages] = useState(0);
+  const [conflictResult, setConflictResult] = useState<Record<string, unknown> | null>(null);
+
+  // Task form state
+  const [taskForm, setTaskForm] = useState({ caseId: '', title: '', description: '', assignedTo: '', priority: 'MEDIUM', dueDate: '' });
+  // Expense form state
+  const [expenseForm, setExpenseForm] = useState({ caseId: '', category: 'FILING_FEE', description: '', amountNaira: '', receiptUrl: '', expenseDate: '' });
+  // Intake form state
+  const [intakeTab, setIntakeTab] = useState<'forms' | 'submissions'>('forms');
+  const [intakeFormData, setIntakeFormData] = useState({ title: '', description: '' });
+  // Template form state
+  const [templateForm, setTemplateForm] = useState({ title: '', templateType: 'NDA', content: '', variables: '' });
+  // Message state
+  const [selectedCaseForMessages, setSelectedCaseForMessages] = useState<LegalCase | null>(null);
+  const [msgBody, setMsgBody] = useState('');
+  const [msgRecipient, setMsgRecipient] = useState('');
+  // Compliance / conflict form state
+  const [conflictForm, setConflictForm] = useState({ fullName: '', phone: '', email: '' });
 
   // Form state
   const [showForm, setShowForm] = useState<string | null>(null);
@@ -503,6 +633,41 @@ export const LegalPracticeUI: React.FC<LegalPracticeUIProps> = ({
           setSelectedTrustAccount(null);
           setTrustTransactions([]);
           setTrustBalance(null);
+        } else if (view === 'tasks') {
+          const data = await apiCall<MatterTask[]>('/api/legal/tasks');
+          if (data) setTasks(data);
+        } else if (view === 'expenses') {
+          const data = await apiCall<MatterExpense[]>('/api/legal/expenses');
+          if (data) setExpenses(data);
+        } else if (view === 'intake') {
+          const [forms, subs] = await Promise.all([
+            apiCall<IntakeForm[]>('/api/legal/intake/forms'),
+            apiCall<IntakeSubmission[]>('/api/legal/intake/submissions')
+          ]);
+          if (forms) setIntakeForms(forms);
+          if (subs) setIntakeSubmissions(subs);
+        } else if (view === 'templates') {
+          const data = await apiCall<DocTemplate[]>('/api/legal/templates');
+          if (data) setTemplates(data);
+          setAssembledDoc(null);
+          setSelectedTemplate(null);
+        } else if (view === 'messages') {
+          if (cases.length === 0) {
+            const casesData = await apiCall<LegalCase[]>('/api/legal/cases');
+            if (casesData) setCases(casesData);
+          }
+          const count = await apiCall<{ unreadCount: number }>('/api/legal/messages/unread');
+          if (count) setUnreadMessages(count.unreadCount);
+        } else if (view === 'analytics') {
+          const [atty, revenue] = await Promise.all([
+            apiCall<{ attorneys: AttorneyAnalytic[] }>('/api/legal/analytics/attorneys'),
+            apiCall<{ months: RevenueMonth[] }>('/api/legal/analytics/revenue')
+          ]);
+          if (atty) setAttorneyAnalytics(atty.attorneys);
+          if (revenue) setRevenueData(revenue.months);
+        } else if (view === 'compliance') {
+          const data = await apiCall<Record<string, unknown>>('/api/legal/compliance/report');
+          if (data) setComplianceReport(data);
         }
       } finally {
         setLoading(false);
@@ -576,6 +741,13 @@ export const LegalPracticeUI: React.FC<LegalPracticeUIProps> = ({
       { key: 'cases', label: t.nav.cases },
       { key: 'time', label: t.nav.timeEntries },
       { key: 'invoices', label: t.nav.invoices },
+      { key: 'tasks', label: 'Tasks' },
+      { key: 'expenses', label: 'Expenses' },
+      { key: 'intake', label: 'Intake' },
+      { key: 'templates', label: 'Templates' },
+      { key: 'messages', label: `Messages${unreadMessages > 0 ? ` (${unreadMessages})` : ''}` },
+      { key: 'analytics', label: 'Analytics' },
+      { key: 'compliance', label: 'Compliance' },
       { key: 'nba', label: t.nav.nbaCompliance },
       { key: 'trust', label: t.nav.trustAccounts }
     ];
@@ -1552,6 +1724,641 @@ export const LegalPracticeUI: React.FC<LegalPracticeUIProps> = ({
   };
 
   // ─────────────────────────────────────────────────────────────────────────
+  // TASK DELEGATION VIEW
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const renderTasks = () => {
+    const priorityColor = (p: string) => ({
+      LOW: COLORS.gray, MEDIUM: COLORS.info, HIGH: COLORS.warning, URGENT: COLORS.danger
+    }[p] ?? COLORS.gray);
+    const statusColor = (s: string) => ({
+      PENDING: COLORS.gray, IN_PROGRESS: COLORS.info, COMPLETED: COLORS.success, CANCELLED: COLORS.darkGray
+    }[s] ?? COLORS.gray);
+
+    const handleCreate = async (e: React.FormEvent) => {
+      e.preventDefault();
+      setLoading(true);
+      try {
+        await apiCall<MatterTask>('/api/legal/tasks', { method: 'POST', body: JSON.stringify({ ...taskForm, dueDate: taskForm.dueDate ? new Date(taskForm.dueDate).getTime() : undefined }) });
+        const data = await apiCall<MatterTask[]>('/api/legal/tasks');
+        if (data) setTasks(data);
+        setShowForm(null);
+        setTaskForm({ caseId: '', title: '', description: '', assignedTo: '', priority: 'MEDIUM', dueDate: '' });
+      } finally { setLoading(false); }
+    };
+
+    const handleStatusUpdate = async (task: MatterTask, status: string) => {
+      await apiCall(`/api/legal/tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
+      const data = await apiCall<MatterTask[]>('/api/legal/tasks');
+      if (data) setTasks(data);
+    };
+
+    return (
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <h2 style={styles.sectionTitle}>Task Management</h2>
+          <button style={{ ...styles.btn('primary'), width: 'auto', padding: '0.5rem 1rem', marginBottom: 0 }} onClick={() => setShowForm('task')}>+ New Task</button>
+        </div>
+        {showForm === 'task' && (
+          <div style={styles.card}>
+            <h3 style={{ margin: '0 0 1rem', fontSize: '1rem', color: COLORS.primary }}>Delegate New Task</h3>
+            <form onSubmit={(e) => { void handleCreate(e); }}>
+              <label style={styles.label}>Case ID <span style={{ color: COLORS.danger }}>*</span></label>
+              <select style={styles.select} value={taskForm.caseId} onChange={e => setTaskForm(f => ({ ...f, caseId: e.target.value }))} required>
+                <option value="">Select Case</option>
+                {cases.map(cs => <option key={cs.id} value={cs.id}>{cs.caseReference} — {cs.title}</option>)}
+              </select>
+              <label style={styles.label}>Title <span style={{ color: COLORS.danger }}>*</span></label>
+              <input style={styles.input} value={taskForm.title} onChange={e => setTaskForm(f => ({ ...f, title: e.target.value }))} placeholder="Task title" required />
+              <label style={styles.label}>Description</label>
+              <textarea style={{ ...styles.input, height: '80px', resize: 'vertical' as const }} value={taskForm.description} onChange={e => setTaskForm(f => ({ ...f, description: e.target.value }))} placeholder="Task details..." />
+              <label style={styles.label}>Assign To (User ID) <span style={{ color: COLORS.danger }}>*</span></label>
+              <input style={styles.input} value={taskForm.assignedTo} onChange={e => setTaskForm(f => ({ ...f, assignedTo: e.target.value }))} placeholder="Attorney/Paralegal User ID" required />
+              <label style={styles.label}>Priority</label>
+              <select style={styles.select} value={taskForm.priority} onChange={e => setTaskForm(f => ({ ...f, priority: e.target.value }))}>
+                {['LOW','MEDIUM','HIGH','URGENT'].map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+              <label style={styles.label}>Due Date</label>
+              <input type="date" style={styles.input} value={taskForm.dueDate} onChange={e => setTaskForm(f => ({ ...f, dueDate: e.target.value }))} />
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button style={{ ...styles.btn('primary'), flex: 1, marginBottom: 0 }} type="submit" disabled={loading}>{loading ? 'Saving...' : 'Create Task'}</button>
+                <button style={{ ...styles.btn('secondary'), flex: 1, marginBottom: 0 }} type="button" onClick={() => setShowForm(null)}>Cancel</button>
+              </div>
+            </form>
+          </div>
+        )}
+        {loading && <p style={{ color: COLORS.gray }}>Loading tasks...</p>}
+        {tasks.length === 0 && !loading ? (
+          <div style={styles.emptyState}><p>No tasks yet. Delegate work to your team.</p></div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {tasks.map(task => (
+              <div key={task.id} style={{ ...styles.card, borderLeft: `4px solid ${priorityColor(task.priority)}`, marginBottom: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div style={{ flex: 1 }}>
+                    <p style={{ margin: 0, fontWeight: 600 }}>{task.title}</p>
+                    {task.description && <p style={{ margin: '0.25rem 0 0', fontSize: '0.85rem', color: COLORS.gray }}>{task.description}</p>}
+                    <p style={{ margin: '0.4rem 0 0', fontSize: '0.8rem', color: COLORS.gray }}>
+                      Assigned to: {task.assignedTo} {task.dueDate ? `• Due: ${formatWATDate(task.dueDate)}` : ''}
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'flex-end' }}>
+                    <span style={styles.badge(priorityColor(task.priority))}>{task.priority}</span>
+                    <span style={styles.badge(statusColor(task.status))}>{task.status.replace('_', ' ')}</span>
+                  </div>
+                </div>
+                {task.status !== 'COMPLETED' && task.status !== 'CANCELLED' && (
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                    {task.status === 'PENDING' && (
+                      <button style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem', border: `1px solid ${COLORS.info}`, color: COLORS.info, background: 'white', borderRadius: '4px', cursor: 'pointer' }} onClick={() => void handleStatusUpdate(task, 'IN_PROGRESS')}>Start</button>
+                    )}
+                    {task.status === 'IN_PROGRESS' && (
+                      <button style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem', border: `1px solid ${COLORS.success}`, color: COLORS.success, background: 'white', borderRadius: '4px', cursor: 'pointer' }} onClick={() => void handleStatusUpdate(task, 'COMPLETED')}>Complete</button>
+                    )}
+                    <button style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem', border: `1px solid ${COLORS.danger}`, color: COLORS.danger, background: 'white', borderRadius: '4px', cursor: 'pointer' }} onClick={() => void handleStatusUpdate(task, 'CANCELLED')}>Cancel</button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // EXPENSE TRACKING VIEW
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const renderExpenses = () => {
+    const totalKobo = expenses.reduce((sum, e) => sum + e.amountKobo, 0);
+    const unbilledKobo = expenses.filter(e => !e.invoiced).reduce((sum, e) => sum + e.amountKobo, 0);
+
+    const handleCreate = async (e: React.FormEvent) => {
+      e.preventDefault();
+      setLoading(true);
+      try {
+        await apiCall('/api/legal/expenses', { method: 'POST', body: JSON.stringify({ ...expenseForm, amountNaira: parseFloat(expenseForm.amountNaira), expenseDate: expenseForm.expenseDate ? new Date(expenseForm.expenseDate).getTime() : undefined }) });
+        const data = await apiCall<MatterExpense[]>('/api/legal/expenses');
+        if (data) setExpenses(data);
+        setShowForm(null);
+        setExpenseForm({ caseId: '', category: 'FILING_FEE', description: '', amountNaira: '', receiptUrl: '', expenseDate: '' });
+      } finally { setLoading(false); }
+    };
+
+    const EXPENSE_CATEGORIES = ['FILING_FEE','TRAVEL','COURIER','PRINTING','EXPERT_WITNESS','COURT_FEES','SEARCH_FEES','OTHER'];
+
+    return (
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <h2 style={styles.sectionTitle}>Expense Tracking</h2>
+          <button style={{ ...styles.btn('primary'), width: 'auto', padding: '0.5rem 1rem', marginBottom: 0 }} onClick={() => setShowForm('expense')}>+ Log Expense</button>
+        </div>
+        <div style={styles.statsGrid}>
+          <div style={styles.statCard(COLORS.primary)}><p style={styles.statValue}>₦{(totalKobo / 100).toLocaleString()}</p><p style={styles.statLabel}>Total Expenses</p></div>
+          <div style={styles.statCard(COLORS.warning)}><p style={styles.statValue}>₦{(unbilledKobo / 100).toLocaleString()}</p><p style={styles.statLabel}>Unbilled</p></div>
+        </div>
+        {showForm === 'expense' && (
+          <div style={styles.card}>
+            <h3 style={{ margin: '0 0 1rem', fontSize: '1rem', color: COLORS.primary }}>Log Expense</h3>
+            <form onSubmit={(e) => { void handleCreate(e); }}>
+              <label style={styles.label}>Case <span style={{ color: COLORS.danger }}>*</span></label>
+              <select style={styles.select} value={expenseForm.caseId} onChange={e => setExpenseForm(f => ({ ...f, caseId: e.target.value }))} required>
+                <option value="">Select Case</option>
+                {cases.map(cs => <option key={cs.id} value={cs.id}>{cs.caseReference} — {cs.title}</option>)}
+              </select>
+              <label style={styles.label}>Category <span style={{ color: COLORS.danger }}>*</span></label>
+              <select style={styles.select} value={expenseForm.category} onChange={e => setExpenseForm(f => ({ ...f, category: e.target.value }))}>
+                {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>)}
+              </select>
+              <label style={styles.label}>Description <span style={{ color: COLORS.danger }}>*</span></label>
+              <input style={styles.input} value={expenseForm.description} onChange={e => setExpenseForm(f => ({ ...f, description: e.target.value }))} placeholder="Expense details" required />
+              <label style={styles.label}>Amount (₦) <span style={{ color: COLORS.danger }}>*</span></label>
+              <input type="number" style={styles.input} value={expenseForm.amountNaira} onChange={e => setExpenseForm(f => ({ ...f, amountNaira: e.target.value }))} placeholder="0.00" step="0.01" min="0" required />
+              <label style={styles.label}>Date</label>
+              <input type="date" style={styles.input} value={expenseForm.expenseDate} onChange={e => setExpenseForm(f => ({ ...f, expenseDate: e.target.value }))} />
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button style={{ ...styles.btn('primary'), flex: 1, marginBottom: 0 }} type="submit" disabled={loading}>{loading ? 'Saving...' : 'Log Expense'}</button>
+                <button style={{ ...styles.btn('secondary'), flex: 1, marginBottom: 0 }} type="button" onClick={() => setShowForm(null)}>Cancel</button>
+              </div>
+            </form>
+          </div>
+        )}
+        {expenses.length === 0 && !loading ? (
+          <div style={styles.emptyState}><p>No expenses logged yet.</p></div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {expenses.map(exp => (
+              <div key={exp.id} style={{ ...styles.card, marginBottom: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <div>
+                    <p style={{ margin: 0, fontWeight: 600, fontSize: '0.95rem' }}>{exp.description}</p>
+                    <p style={{ margin: '0.2rem 0 0', fontSize: '0.8rem', color: COLORS.gray }}>{exp.category.replace(/_/g,' ')} • {formatWATDate(exp.expenseDate)}</p>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <p style={{ margin: 0, fontWeight: 700, color: COLORS.primary }}>₦{(exp.amountKobo / 100).toLocaleString()}</p>
+                    <span style={styles.badge(exp.invoiced ? COLORS.success : COLORS.warning)}>{exp.invoiced ? 'Invoiced' : 'Unbilled'}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CLIENT INTAKE VIEW
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const renderIntake = () => {
+    const handleCreateForm = async (e: React.FormEvent) => {
+      e.preventDefault();
+      setLoading(true);
+      try {
+        await apiCall('/api/legal/intake/forms', { method: 'POST', body: JSON.stringify({ ...intakeFormData, fields: [
+          { id: 'name', label: 'Full Name', type: 'TEXT', required: true },
+          { id: 'phone', label: 'Phone Number', type: 'PHONE', required: true },
+          { id: 'email', label: 'Email', type: 'EMAIL', required: false },
+          { id: 'matter', label: 'Legal Matter Description', type: 'TEXTAREA', required: true }
+        ]}) });
+        const data = await apiCall<IntakeForm[]>('/api/legal/intake/forms');
+        if (data) setIntakeForms(data);
+        setShowForm(null);
+        setIntakeFormData({ title: '', description: '' });
+      } finally { setLoading(false); }
+    };
+
+    const handleReview = async (sub: IntakeSubmission, status: string) => {
+      await apiCall(`/api/legal/intake/submissions/${sub.id}/review`, { method: 'PATCH', body: JSON.stringify({ status }) });
+      const data = await apiCall<IntakeSubmission[]>('/api/legal/intake/submissions');
+      if (data) setIntakeSubmissions(data);
+    };
+
+    const statusColor = (s: string) => ({ PENDING: COLORS.gray, REVIEWED: COLORS.info, CONVERTED: COLORS.success, REJECTED: COLORS.danger }[s] ?? COLORS.gray);
+
+    return (
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <h2 style={styles.sectionTitle}>Client Intake</h2>
+          {intakeTab === 'forms' && <button style={{ ...styles.btn('primary'), width: 'auto', padding: '0.5rem 1rem', marginBottom: 0 }} onClick={() => setShowForm('intake-form')}>+ New Form</button>}
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+          {(['forms','submissions'] as const).map(tab => (
+            <button key={tab} style={{ padding: '0.4rem 1rem', borderRadius: '20px', border: 'none', cursor: 'pointer', fontWeight: intakeTab === tab ? 700 : 400, backgroundColor: intakeTab === tab ? COLORS.primary : COLORS.lightGray, color: intakeTab === tab ? COLORS.white : COLORS.gray, fontSize: '0.85rem' }} onClick={() => setIntakeTab(tab)}>
+              {tab === 'forms' ? `Forms (${intakeForms.length})` : `Submissions (${intakeSubmissions.filter(s => s.status === 'PENDING').length} pending)`}
+            </button>
+          ))}
+        </div>
+        {showForm === 'intake-form' && (
+          <div style={styles.card}>
+            <h3 style={{ margin: '0 0 1rem', fontSize: '1rem' }}>Create Intake Form</h3>
+            <form onSubmit={(e) => { void handleCreateForm(e); }}>
+              <label style={styles.label}>Form Title <span style={{ color: COLORS.danger }}>*</span></label>
+              <input style={styles.input} value={intakeFormData.title} onChange={e => setIntakeFormData(f => ({ ...f, title: e.target.value }))} placeholder="e.g., New Client Onboarding" required />
+              <label style={styles.label}>Description</label>
+              <textarea style={{ ...styles.input, height: '60px' }} value={intakeFormData.description} onChange={e => setIntakeFormData(f => ({ ...f, description: e.target.value }))} placeholder="Brief description of this form's purpose" />
+              <p style={{ fontSize: '0.8rem', color: COLORS.gray, marginTop: '-0.5rem' }}>Default fields will be added: Name, Phone, Email, Legal Matter</p>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button style={{ ...styles.btn('primary'), flex: 1, marginBottom: 0 }} type="submit" disabled={loading}>{loading ? 'Creating...' : 'Create Form'}</button>
+                <button style={{ ...styles.btn('secondary'), flex: 1, marginBottom: 0 }} type="button" onClick={() => setShowForm(null)}>Cancel</button>
+              </div>
+            </form>
+          </div>
+        )}
+        {activeTab === 'forms' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {intakeForms.length === 0 ? <div style={styles.emptyState}><p>No intake forms created yet.</p></div> : intakeForms.map(form => (
+              <div key={form.id} style={{ ...styles.card, marginBottom: 0, borderLeft: `4px solid ${form.isActive ? COLORS.success : COLORS.gray}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <div>
+                    <p style={{ margin: 0, fontWeight: 600 }}>{form.title}</p>
+                    {form.description && <p style={{ margin: '0.2rem 0 0', fontSize: '0.85rem', color: COLORS.gray }}>{form.description}</p>}
+                    <p style={{ margin: '0.3rem 0 0', fontSize: '0.8rem', color: COLORS.gray }}>{Array.isArray(form.fields) ? form.fields.length : 0} fields • Created {formatWATDate(form.createdAt)}</p>
+                  </div>
+                  <span style={styles.badge(form.isActive ? COLORS.success : COLORS.gray)}>{form.isActive ? 'Active' : 'Inactive'}</span>
+                </div>
+                <div style={{ marginTop: '0.5rem' }}>
+                  <code style={{ fontSize: '0.75rem', backgroundColor: '#f1f3f5', padding: '0.2rem 0.5rem', borderRadius: '4px', display: 'block', wordBreak: 'break-all' as const }}>
+                    Submit URL: /api/legal/intake/submit/{form.id}
+                  </code>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {activeTab === 'submissions' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {intakeSubmissions.length === 0 ? <div style={styles.emptyState}><p>No submissions received yet.</p></div> : intakeSubmissions.map(sub => (
+              <div key={sub.id} style={{ ...styles.card, marginBottom: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <p style={{ margin: 0, fontWeight: 600 }}>{sub.submitterName}</p>
+                    <p style={{ margin: '0.2rem 0', fontSize: '0.85rem', color: COLORS.gray }}>{sub.submitterEmail ?? sub.submitterPhone ?? 'No contact'}</p>
+                    <p style={{ margin: 0, fontSize: '0.8rem', color: COLORS.gray }}>{formatWATDate(sub.createdAt)}</p>
+                  </div>
+                  <span style={styles.badge(statusColor(sub.status))}>{sub.status}</span>
+                </div>
+                {sub.status === 'PENDING' && (
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                    <button style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem', background: COLORS.success, color: COLORS.white, border: 'none', borderRadius: '4px', cursor: 'pointer' }} onClick={() => void handleReview(sub, 'REVIEWED')}>Review</button>
+                    <button style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem', background: COLORS.info, color: COLORS.white, border: 'none', borderRadius: '4px', cursor: 'pointer' }} onClick={() => void handleReview(sub, 'CONVERTED')}>Convert to Client</button>
+                    <button style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem', background: COLORS.danger, color: COLORS.white, border: 'none', borderRadius: '4px', cursor: 'pointer' }} onClick={() => void handleReview(sub, 'REJECTED')}>Reject</button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // DOCUMENT TEMPLATES VIEW
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const renderTemplates = () => {
+    const TEMPLATE_TYPES = ['NDA','EMPLOYMENT_AGREEMENT','RETAINER_AGREEMENT','POWER_OF_ATTORNEY','AFFIDAVIT','NOTICE','LETTER_DEMAND','SETTLEMENT_AGREEMENT','OTHER'];
+
+    const handleCreate = async (e: React.FormEvent) => {
+      e.preventDefault();
+      setLoading(true);
+      try {
+        const vars = templateForm.variables.split(',').map(v => v.trim()).filter(Boolean);
+        await apiCall('/api/legal/templates', { method: 'POST', body: JSON.stringify({ ...templateForm, variables: vars }) });
+        const data = await apiCall<DocTemplate[]>('/api/legal/templates');
+        if (data) setTemplates(data);
+        setShowForm(null);
+        setTemplateForm({ title: '', templateType: 'NDA', content: '', variables: '' });
+      } finally { setLoading(false); }
+    };
+
+    const handleAssemble = async () => {
+      if (!selectedTemplate) return;
+      setLoading(true);
+      try {
+        const result = await apiCall<{ assembledContent: string }>(`/api/legal/templates/${selectedTemplate.id}/assemble`, { method: 'POST', body: JSON.stringify({ variables: templateVars }) });
+        if (result) setAssembledDoc(result.assembledContent);
+      } finally { setLoading(false); }
+    };
+
+    if (selectedTemplate) {
+      return (
+        <div>
+          <button style={{ ...styles.btn('secondary'), width: 'auto', padding: '0.5rem 1rem', marginBottom: '1rem' }} onClick={() => { setSelectedTemplate(null); setAssembledDoc(null); setTemplateVars({}); }}>← Back to Templates</button>
+          <div style={styles.card}>
+            <h2 style={{ margin: '0 0 0.5rem', color: COLORS.primary }}>{selectedTemplate.title}</h2>
+            <span style={styles.badge(COLORS.info)}>{selectedTemplate.templateType.replace(/_/g,' ')}</span>
+            {selectedTemplate.variables.length > 0 && (
+              <div style={{ marginTop: '1rem' }}>
+                <h3 style={{ fontSize: '0.9rem', fontWeight: 700 }}>Fill in Variables</h3>
+                {selectedTemplate.variables.map(v => (
+                  <div key={v}>
+                    <label style={styles.label}>{v}</label>
+                    <input style={styles.input} value={templateVars[v] ?? ''} onChange={e => setTemplateVars(prev => ({ ...prev, [v]: e.target.value }))} placeholder={`Enter ${v}`} />
+                  </div>
+                ))}
+                <button style={styles.btn('primary')} onClick={() => void handleAssemble()} disabled={loading}>{loading ? 'Assembling...' : 'Assemble Document'}</button>
+              </div>
+            )}
+          </div>
+          {assembledDoc && (
+            <div style={styles.card}>
+              <h3 style={{ color: COLORS.primary }}>Assembled Document</h3>
+              <pre style={{ whiteSpace: 'pre-wrap' as const, fontFamily: 'Georgia, serif', fontSize: '0.9rem', lineHeight: 1.6, backgroundColor: '#f8f9fa', padding: '1rem', borderRadius: '6px', overflowY: 'auto' as const, maxHeight: '500px' }}>{assembledDoc}</pre>
+              <button style={styles.btn('secondary')} onClick={() => { const blob = new Blob([assembledDoc], { type: 'text/plain' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${selectedTemplate.title}.txt`; a.click(); }}>Download Document</button>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <h2 style={styles.sectionTitle}>Document Templates</h2>
+          <button style={{ ...styles.btn('primary'), width: 'auto', padding: '0.5rem 1rem', marginBottom: 0 }} onClick={() => setShowForm('template')}>+ New Template</button>
+        </div>
+        {showForm === 'template' && (
+          <div style={styles.card}>
+            <h3 style={{ margin: '0 0 1rem', fontSize: '1rem' }}>Create Template</h3>
+            <form onSubmit={(e) => { void handleCreate(e); }}>
+              <label style={styles.label}>Title <span style={{ color: COLORS.danger }}>*</span></label>
+              <input style={styles.input} value={templateForm.title} onChange={e => setTemplateForm(f => ({ ...f, title: e.target.value }))} placeholder="Template name" required />
+              <label style={styles.label}>Type</label>
+              <select style={styles.select} value={templateForm.templateType} onChange={e => setTemplateForm(f => ({ ...f, templateType: e.target.value }))}>
+                {TEMPLATE_TYPES.map(t => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
+              </select>
+              <label style={styles.label}>Variables (comma-separated)</label>
+              <input style={styles.input} value={templateForm.variables} onChange={e => setTemplateForm(f => ({ ...f, variables: e.target.value }))} placeholder="ClientName, Date, Amount" />
+              <label style={styles.label}>Template Content (use {'{{VariableName}}'} for placeholders) <span style={{ color: COLORS.danger }}>*</span></label>
+              <textarea style={{ ...styles.input, height: '200px', fontFamily: 'monospace', resize: 'vertical' as const }} value={templateForm.content} onChange={e => setTemplateForm(f => ({ ...f, content: e.target.value }))} placeholder="This agreement is entered into by {{ClientName}} on {{Date}}..." required />
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button style={{ ...styles.btn('primary'), flex: 1, marginBottom: 0 }} type="submit" disabled={loading}>{loading ? 'Saving...' : 'Save Template'}</button>
+                <button style={{ ...styles.btn('secondary'), flex: 1, marginBottom: 0 }} type="button" onClick={() => setShowForm(null)}>Cancel</button>
+              </div>
+            </form>
+          </div>
+        )}
+        {templates.length === 0 && !loading ? (
+          <div style={styles.emptyState}><p>No templates yet. Create your first document template.</p></div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {templates.map(tmpl => (
+              <div key={tmpl.id} style={{ ...styles.card, marginBottom: 0, cursor: 'pointer' }} onClick={() => { setSelectedTemplate(tmpl); setTemplateVars(Object.fromEntries((tmpl.variables ?? []).map(v => [v, '']))); }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <div>
+                    <p style={{ margin: 0, fontWeight: 600 }}>{tmpl.title}</p>
+                    <p style={{ margin: '0.2rem 0 0', fontSize: '0.85rem', color: COLORS.gray }}>{tmpl.templateType.replace(/_/g,' ')} • {tmpl.variables?.length ?? 0} variables</p>
+                  </div>
+                  <span style={{ color: COLORS.primary, fontSize: '0.9rem' }}>Use →</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SECURE MESSAGING VIEW
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const renderMessages = () => {
+    const loadMessages = async (cs: LegalCase) => {
+      setSelectedCaseForMessages(cs);
+      const data = await apiCall<ClientMessage[]>(`/api/legal/messages/case/${cs.id}`);
+      if (data) setMessages(data);
+    };
+
+    const handleSend = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!selectedCaseForMessages || !msgBody || !msgRecipient) return;
+      setLoading(true);
+      try {
+        await apiCall('/api/legal/messages', { method: 'POST', body: JSON.stringify({ caseId: selectedCaseForMessages.id, recipientId: msgRecipient, body: msgBody }) });
+        const data = await apiCall<ClientMessage[]>(`/api/legal/messages/case/${selectedCaseForMessages.id}`);
+        if (data) setMessages(data);
+        setMsgBody('');
+      } finally { setLoading(false); }
+    };
+
+    if (selectedCaseForMessages) {
+      return (
+        <div>
+          <button style={{ ...styles.btn('secondary'), width: 'auto', padding: '0.5rem 1rem', marginBottom: '1rem' }} onClick={() => { setSelectedCaseForMessages(null); setMessages([]); }}>← Back</button>
+          <h2 style={styles.sectionTitle}>Messages — {selectedCaseForMessages.title}</h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem', maxHeight: '400px', overflowY: 'auto' as const }}>
+            {messages.length === 0 ? <p style={{ color: COLORS.gray, textAlign: 'center' }}>No messages yet. Start the conversation.</p> : messages.map(msg => (
+              <div key={msg.id} style={{ backgroundColor: msg.senderId === userId ? COLORS.primary : COLORS.white, color: msg.senderId === userId ? COLORS.white : COLORS.text, padding: '0.75rem', borderRadius: '8px', maxWidth: '80%', alignSelf: msg.senderId === userId ? 'flex-end' as const : 'flex-start' as const, border: msg.senderId !== userId ? `1px solid ${COLORS.border}` : 'none' }}>
+                <p style={{ margin: 0, fontSize: '0.9rem' }}>{msg.body}</p>
+                <p style={{ margin: '0.25rem 0 0', fontSize: '0.7rem', opacity: 0.7 }}>{msg.senderType} • {formatWATDateTime(msg.createdAt)}</p>
+              </div>
+            ))}
+          </div>
+          <form onSubmit={(e) => { void handleSend(e); }} style={{ borderTop: `1px solid ${COLORS.border}`, paddingTop: '1rem' }}>
+            <label style={styles.label}>Recipient (User ID)</label>
+            <input style={styles.input} value={msgRecipient} onChange={e => setMsgRecipient(e.target.value)} placeholder="Client or attorney user ID" required />
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <textarea style={{ ...styles.input, flex: 1, marginBottom: 0, height: '60px', resize: 'vertical' as const }} value={msgBody} onChange={e => setMsgBody(e.target.value)} placeholder="Type your message..." required />
+              <button style={{ ...styles.btn('primary'), width: 'auto', padding: '0 1.5rem', marginBottom: 0 }} type="submit" disabled={loading || !msgBody}>Send</button>
+            </div>
+          </form>
+        </div>
+      );
+    }
+
+    return (
+      <div>
+        <h2 style={styles.sectionTitle}>Secure Messaging{unreadMessages > 0 && <span style={{ ...styles.badge(COLORS.danger), marginLeft: '0.5rem' }}>{unreadMessages} unread</span>}</h2>
+        <p style={{ color: COLORS.gray, fontSize: '0.9rem' }}>Select a case to view and send messages.</p>
+        {cases.length === 0 ? <div style={styles.emptyState}><p>No cases available.</p></div> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {cases.map(cs => (
+              <div key={cs.id} style={{ ...styles.card, marginBottom: 0, cursor: 'pointer' }} onClick={() => void loadMessages(cs)}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <div>
+                    <p style={{ margin: 0, fontWeight: 600 }}>{cs.title}</p>
+                    <p style={{ margin: '0.2rem 0 0', fontSize: '0.8rem', color: COLORS.gray }}>{cs.caseReference} • {cs.status}</p>
+                  </div>
+                  <span style={{ color: COLORS.primary }}>→</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PERFORMANCE ANALYTICS VIEW
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const renderAnalytics = () => {
+    const totalBilledNaira = attorneyAnalytics.reduce((sum, a) => sum + a.totalBilledNaira, 0);
+    const totalHours = attorneyAnalytics.reduce((sum, a) => sum + parseFloat(a.totalHours), 0);
+    const avgUtilization = attorneyAnalytics.length > 0
+      ? (attorneyAnalytics.reduce((sum, a) => sum + parseFloat(a.utilizationRate), 0) / attorneyAnalytics.length).toFixed(1)
+      : '0.0';
+    const totalRevenue = revenueData.reduce((sum, r) => sum + r.collectedNaira, 0);
+
+    return (
+      <div>
+        <h2 style={styles.sectionTitle}>Performance Analytics</h2>
+        <div style={styles.statsGrid}>
+          <div style={styles.statCard(COLORS.primary)}><p style={styles.statValue}>₦{totalBilledNaira.toLocaleString()}</p><p style={styles.statLabel}>Total Billed</p></div>
+          <div style={styles.statCard(COLORS.success)}><p style={styles.statValue}>₦{totalRevenue.toLocaleString()}</p><p style={styles.statLabel}>Collected</p></div>
+          <div style={styles.statCard(COLORS.info)}><p style={styles.statValue}>{totalHours.toFixed(0)}h</p><p style={styles.statLabel}>Total Hours</p></div>
+          <div style={styles.statCard(COLORS.gold)}><p style={styles.statValue}>{avgUtilization}%</p><p style={styles.statLabel}>Avg Utilization</p></div>
+        </div>
+
+        {revenueData.length > 0 && (
+          <div style={styles.card}>
+            <h3 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem', fontWeight: 700 }}>Monthly Revenue (Last 6 Months)</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {revenueData.map(r => (
+                <div key={r.period}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.2rem' }}>
+                    <span style={{ fontWeight: 600 }}>{r.period}</span>
+                    <span>₦{r.collectedNaira.toLocaleString()} collected ({r.collectionRate}%)</span>
+                  </div>
+                  <div style={{ backgroundColor: COLORS.lightGray, borderRadius: '4px', height: '8px', overflow: 'hidden' }}>
+                    <div style={{ backgroundColor: COLORS.success, height: '100%', width: `${Math.min(100, parseFloat(r.collectionRate))}%`, borderRadius: '4px', transition: 'width 0.5s' }} />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: COLORS.gray, marginTop: '0.1rem' }}>
+                    <span>Invoiced: ₦{r.invoicedNaira.toLocaleString()}</span>
+                    <span>Outstanding: ₦{r.outstandingNaira.toLocaleString()}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {attorneyAnalytics.length > 0 && (
+          <div style={styles.card}>
+            <h3 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem', fontWeight: 700 }}>Attorney Performance</h3>
+            {attorneyAnalytics.map(a => (
+              <div key={a.attorneyId} style={{ borderBottom: `1px solid ${COLORS.border}`, paddingBottom: '0.75rem', marginBottom: '0.75rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <p style={{ margin: 0, fontWeight: 600, fontSize: '0.9rem' }}>{a.attorneyId}</p>
+                    <p style={{ margin: '0.15rem 0 0', fontSize: '0.8rem', color: COLORS.gray }}>{a.caseCount} cases • {a.totalHours}h total • {a.billableHours}h billable</p>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <p style={{ margin: 0, fontWeight: 700, color: COLORS.primary }}>₦{a.totalBilledNaira.toLocaleString()}</p>
+                    <p style={{ margin: 0, fontSize: '0.8rem', color: parseFloat(a.utilizationRate) >= 70 ? COLORS.success : COLORS.warning }}>{a.utilizationRate}% utilization</p>
+                  </div>
+                </div>
+                <div style={{ backgroundColor: COLORS.lightGray, borderRadius: '4px', height: '6px', overflow: 'hidden', marginTop: '0.5rem' }}>
+                  <div style={{ backgroundColor: parseFloat(a.utilizationRate) >= 70 ? COLORS.success : COLORS.warning, height: '100%', width: `${Math.min(100, parseFloat(a.utilizationRate))}%`, borderRadius: '4px' }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {attorneyAnalytics.length === 0 && revenueData.length === 0 && !loading && (
+          <div style={styles.emptyState}><p>No analytics data yet. Start logging time and generating invoices.</p></div>
+        )}
+
+        <div style={styles.card}>
+          <h3 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem', fontWeight: 700 }}>Export Options</h3>
+          <a href={`${apiBaseUrl}/api/legal/accounting/export?format=csv`} style={{ display: 'block', ...styles.btn('secondary'), textAlign: 'center' as const, textDecoration: 'none' }} download>Download Invoices CSV (Xero/QuickBooks)</a>
+          <a href={`${apiBaseUrl}/api/legal/calendar/ical`} style={{ display: 'block', ...styles.btn('secondary'), textAlign: 'center' as const, textDecoration: 'none' }} download>Download Court Calendar (.ics)</a>
+        </div>
+      </div>
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // COMPLIANCE REPORT VIEW
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const renderCompliance = () => {
+    const report = complianceReport;
+    const statusBadge = (status: string) => (
+      <span style={styles.badge(status === 'COMPLIANT' ? COLORS.success : status === 'ATTENTION_NEEDED' ? COLORS.warning : COLORS.gray)}>{status.replace(/_/g,' ')}</span>
+    );
+
+    const handleConflictCheck = async (e: React.FormEvent) => {
+      e.preventDefault();
+      setLoading(true);
+      try {
+        const result = await apiCall<Record<string, unknown>>('/api/legal/conflict-check', { method: 'POST', body: JSON.stringify(conflictForm) });
+        if (result) setConflictResult(result);
+      } finally { setLoading(false); }
+    };
+
+    return (
+      <div>
+        <h2 style={styles.sectionTitle}>Compliance & Reports</h2>
+
+        {/* NBA Compliance Report */}
+        <div style={styles.card}>
+          <h3 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem', fontWeight: 700, color: COLORS.primary }}>NBA Compliance Report</h3>
+          {report ? (
+            <>
+              <div style={styles.statsGrid}>
+                <div style={styles.statCard(COLORS.primary)}><p style={styles.statValue}>{report.totalAttorneys as number}</p><p style={styles.statLabel}>Total Attorneys</p></div>
+                <div style={styles.statCard(COLORS.success)}><p style={styles.statValue}>{report.verifiedAttorneys as number}</p><p style={styles.statLabel}>Verified</p></div>
+                <div style={styles.statCard(COLORS.warning)}><p style={styles.statValue}>{report.expiringCertificates as number}</p><p style={styles.statLabel}>Certs Expiring</p></div>
+                <div style={styles.statCard(COLORS.info)}><p style={styles.statValue}>{report.totalTrustAccounts as number}</p><p style={styles.statLabel}>Trust Accounts</p></div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0', borderBottom: `1px solid ${COLORS.border}` }}>
+                  <span style={{ fontSize: '0.9rem' }}>NBA Verification</span>
+                  {statusBadge((report.complianceStatus as Record<string, string>)?.nbaVerification ?? 'UNKNOWN')}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0', borderBottom: `1px solid ${COLORS.border}` }}>
+                  <span style={{ fontSize: '0.9rem' }}>Expiring Certificates</span>
+                  {statusBadge((report.complianceStatus as Record<string, string>)?.expiringCertificates ?? 'UNKNOWN')}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0' }}>
+                  <span style={{ fontSize: '0.9rem' }}>Trust Accounts</span>
+                  {statusBadge((report.complianceStatus as Record<string, string>)?.trustAccounts ?? 'UNKNOWN')}
+                </div>
+              </div>
+              <p style={{ margin: '0.75rem 0 0', fontSize: '0.8rem', color: COLORS.gray }}>Trust Balance: ₦{((report.totalTrustBalanceNaira as number) ?? 0).toLocaleString()} • Cases: {report.activeCases as number} active / {report.totalCases as number} total</p>
+              <p style={{ margin: '0.25rem 0 0', fontSize: '0.75rem', color: COLORS.gray }}>Generated: {report.generatedAt as string}</p>
+            </>
+          ) : loading ? <p style={{ color: COLORS.gray }}>Loading report...</p> : <p style={{ color: COLORS.gray }}>No compliance data available.</p>}
+        </div>
+
+        {/* Conflict of Interest Checker */}
+        <div style={styles.card}>
+          <h3 style={{ margin: '0 0 0.75rem', fontSize: '0.95rem', fontWeight: 700, color: COLORS.primary }}>Conflict of Interest Checker</h3>
+          <form onSubmit={(e) => { void handleConflictCheck(e); }}>
+            <label style={styles.label}>Client Full Name <span style={{ color: COLORS.danger }}>*</span></label>
+            <input style={styles.input} value={conflictForm.fullName} onChange={e => setConflictForm(f => ({ ...f, fullName: e.target.value }))} placeholder="Prospective client name" required />
+            <label style={styles.label}>Phone Number</label>
+            <input style={styles.input} value={conflictForm.phone} onChange={e => setConflictForm(f => ({ ...f, phone: e.target.value }))} placeholder="+234..." />
+            <label style={styles.label}>Email</label>
+            <input style={styles.input} value={conflictForm.email} onChange={e => setConflictForm(f => ({ ...f, email: e.target.value }))} placeholder="email@example.com" />
+            <button style={styles.btn('primary')} type="submit" disabled={loading}>{loading ? 'Checking...' : 'Check for Conflicts'}</button>
+          </form>
+          {conflictResult && (
+            <div style={{ marginTop: '0.75rem', padding: '0.75rem', backgroundColor: (conflictResult.hasConflict as boolean) ? '#fff3cd' : '#d4edda', borderRadius: '6px', border: `1px solid ${(conflictResult.hasConflict as boolean) ? COLORS.warning : COLORS.success}` }}>
+              {(conflictResult.hasConflict as boolean) ? (
+                <>
+                  <p style={{ margin: 0, fontWeight: 700, color: COLORS.warning }}>⚠️ Potential Conflict Detected</p>
+                  <p style={{ margin: '0.25rem 0 0', fontSize: '0.85rem' }}>Found {(conflictResult.conflicts as unknown[]).length} existing record(s) that may conflict. Review before proceeding.</p>
+                </>
+              ) : (
+                <p style={{ margin: 0, fontWeight: 700, color: COLORS.success }}>✓ No conflicts found. Safe to proceed.</p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
   // MAIN RENDER
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -1573,6 +2380,13 @@ export const LegalPracticeUI: React.FC<LegalPracticeUIProps> = ({
         {view === 'invoices' && renderInvoices()}
         {view === 'nba' && renderNBA()}
         {view === 'trust' && renderTrust()}
+        {view === 'tasks' && renderTasks()}
+        {view === 'expenses' && renderExpenses()}
+        {view === 'intake' && renderIntake()}
+        {view === 'templates' && renderTemplates()}
+        {view === 'messages' && renderMessages()}
+        {view === 'analytics' && renderAnalytics()}
+        {view === 'compliance' && renderCompliance()}
       </main>
     </div>
   );

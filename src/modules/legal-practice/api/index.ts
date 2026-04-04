@@ -50,6 +50,58 @@ import {
   getTrustAccountBalance,
   countTrustTransactionsByAccount,
   countTrustTransactionsByTenant,
+  insertRetainerEntry,
+  getRetainerLedgerByClient,
+  getRetainerBalance,
+  getTasksByTenant,
+  getTasksByCase,
+  getTaskById,
+  insertTask,
+  updateTask,
+  updateTaskStatus,
+  softDeleteTask,
+  getExpensesByCase,
+  getExpensesByTenant,
+  insertExpense,
+  softDeleteExpense,
+  getIntakeFormsByTenant,
+  getIntakeFormById,
+  insertIntakeForm,
+  updateIntakeForm,
+  softDeleteIntakeForm,
+  getIntakeSubmissionsByTenant,
+  getIntakeSubmissionById,
+  insertIntakeSubmission,
+  updateIntakeSubmissionStatus,
+  getAnalysisByCase,
+  getAnalysisById,
+  insertDocumentAnalysis,
+  updateDocumentAnalysis,
+  getTemplatesByTenant,
+  getTemplateById,
+  insertDocumentTemplate,
+  updateDocumentTemplate,
+  softDeleteTemplate,
+  getESignaturesByCase,
+  getESignatureById,
+  getESignatureByToken,
+  insertESignatureRequest,
+  updateESignatureStatus,
+  insertPortalToken,
+  getPortalTokenByValue,
+  touchPortalToken,
+  revokePortalToken,
+  getMessagesByCase,
+  getUnreadMessageCount,
+  insertMessage,
+  markMessageRead,
+  insertNotificationSchedule,
+  getScheduledNotificationsByEntity,
+  cancelNotificationsByEntity,
+  getAttorneyAnalytics,
+  getMonthlyRevenue,
+  checkConflictOfInterest,
+  generateNBAComplianceReport,
   type D1Database
 } from '../../../core/db/queries';
 import {
@@ -63,6 +115,10 @@ import {
   validateYearOfCall,
   nowUTC
 } from '../utils';
+import {
+  analyzeContract,
+  assembleDocumentFromTemplate
+} from '../../../core/ai-platform-client';
 import type {
   LegalClient,
   LegalCase,
@@ -74,7 +130,18 @@ import type {
   TrustAccount,
   TrustTransaction,
   TrustTransactionType,
-  CaseStatus
+  CaseStatus,
+  RetainerLedgerEntry,
+  MatterTask,
+  MatterExpense,
+  ClientIntakeForm,
+  ClientIntakeSubmission,
+  DocumentAnalysis,
+  DocumentTemplate,
+  ESignatureRequest,
+  ClientPortalToken,
+  ClientMessage,
+  NotificationSchedule
 } from '../../../core/db/schema';
 import { TRUST_TRANSACTION_DIRECTION } from '../../../core/db/schema';
 
@@ -97,6 +164,9 @@ export interface Env {
   TERMII_API_KEY?: string;
   YOURNOTIFY_API_KEY?: string;
   TERMII_SENDER_ID?: string;
+  AI_API_URL?: string;
+  AI_API_KEY?: string;
+  AI_MODEL?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1358,6 +1428,1168 @@ app.post('/api/legal/sync', async (c) => {
   } catch (error) {
     logger.error('Sync failed', { tenantId, error: String(error) });
     return c.json<ApiResponse>(fail(['Sync processing failed']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RETAINER MANAGEMENT
+// Blueprint Reference: Part 10.8 — Retainer Management (append-only ledger)
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.get('/api/legal/retainer/:clientId', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { clientId } = c.req.param();
+  try {
+    const [entries, balance] = await Promise.all([
+      getRetainerLedgerByClient(c.env.DB, tenantId, clientId),
+      getRetainerBalance(c.env.DB, tenantId, clientId)
+    ]);
+    return c.json<ApiResponse>(ok({ entries, balance }));
+  } catch (error) {
+    logger.error('Get retainer ledger failed', { tenantId, clientId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to fetch retainer ledger']), 500);
+  }
+});
+
+app.post('/api/legal/retainer', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const userId = c.get('userId' as never) as string;
+  try {
+    const body = await c.req.json<{
+      clientId: string;
+      caseId?: string;
+      entryType: 'DEPOSIT' | 'DRAWDOWN' | 'REFUND';
+      amountNaira: number;
+      description: string;
+      invoiceId?: string;
+      transactionDate?: number;
+    }>();
+    if (!body.clientId || !body.entryType || !body.amountNaira || !body.description) {
+      return c.json<ApiResponse>(fail(['clientId, entryType, amountNaira, description are required']), 400);
+    }
+    const entry: RetainerLedgerEntry = {
+      id: generateId(),
+      tenantId,
+      clientId: body.clientId,
+      caseId: body.caseId ?? null,
+      entryType: body.entryType,
+      amountKobo: Math.round(body.amountNaira * 100),
+      description: body.description,
+      invoiceId: body.invoiceId ?? null,
+      recordedBy: userId,
+      transactionDate: body.transactionDate ?? Date.now(),
+      createdAt: Date.now()
+    };
+    await insertRetainerEntry(c.env.DB, entry);
+    return c.json<ApiResponse>(ok(entry), 201);
+  } catch (error) {
+    logger.error('Insert retainer entry failed', { tenantId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to record retainer entry']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK DELEGATION
+// Blueprint Reference: Part 10.8 — Task Delegation
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.get('/api/legal/tasks', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { status, assignedTo, caseId, limit = '50', offset = '0' } = c.req.query();
+  try {
+    const tasks = await getTasksByTenant(
+      c.env.DB, tenantId,
+      { status, assignedTo, caseId },
+      parseInt(limit), parseInt(offset)
+    );
+    return c.json<ApiResponse>(ok(tasks));
+  } catch (error) {
+    logger.error('Get tasks failed', { tenantId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to fetch tasks']), 500);
+  }
+});
+
+app.get('/api/legal/tasks/case/:caseId', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { caseId } = c.req.param();
+  try {
+    const tasks = await getTasksByCase(c.env.DB, tenantId, caseId);
+    return c.json<ApiResponse>(ok(tasks));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to fetch case tasks']), 500);
+  }
+});
+
+app.post('/api/legal/tasks', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const userId = c.get('userId' as never) as string;
+  try {
+    const body = await c.req.json<{
+      caseId: string;
+      title: string;
+      description?: string;
+      assignedTo: string;
+      priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+      dueDate?: number;
+    }>();
+    if (!body.caseId || !body.title || !body.assignedTo) {
+      return c.json<ApiResponse>(fail(['caseId, title, assignedTo are required']), 400);
+    }
+    const now = Date.now();
+    const task: MatterTask = {
+      id: generateId(),
+      tenantId,
+      caseId: body.caseId,
+      title: body.title,
+      description: body.description ?? null,
+      assignedTo: body.assignedTo,
+      assignedBy: userId,
+      priority: body.priority ?? 'MEDIUM',
+      status: 'PENDING',
+      dueDate: body.dueDate ?? null,
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null
+    };
+    await insertTask(c.env.DB, task);
+    if (body.dueDate) {
+      await insertNotificationSchedule(c.env.DB, {
+        id: generateId(),
+        tenantId,
+        entityType: 'TASK',
+        entityId: task.id,
+        notificationType: 'TASK_DUE',
+        recipientPhone: null,
+        recipientEmail: null,
+        message: `Task "${body.title}" is due`,
+        scheduledFor: body.dueDate - 86400000,
+        sentAt: null,
+        status: 'PENDING',
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+    return c.json<ApiResponse>(ok(task), 201);
+  } catch (error) {
+    logger.error('Insert task failed', { tenantId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to create task']), 500);
+  }
+});
+
+app.patch('/api/legal/tasks/:id', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { id } = c.req.param();
+  try {
+    const body = await c.req.json<Partial<{
+      title: string; description: string; assignedTo: string;
+      priority: string; dueDate: number; status: string;
+    }>>();
+    await updateTask(c.env.DB, tenantId, id, body);
+    if (body.status === 'COMPLETED') {
+      await updateTaskStatus(c.env.DB, tenantId, id, 'COMPLETED', Date.now());
+      await cancelNotificationsByEntity(c.env.DB, tenantId, 'TASK', id);
+    }
+    const updated = await getTaskById(c.env.DB, tenantId, id);
+    return c.json<ApiResponse>(ok(updated));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to update task']), 500);
+  }
+});
+
+app.delete('/api/legal/tasks/:id', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { id } = c.req.param();
+  try {
+    await softDeleteTask(c.env.DB, tenantId, id);
+    return c.json<ApiResponse>(ok({ deleted: true }));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to delete task']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPENSE TRACKING
+// Blueprint Reference: Part 10.8 — Expense Tracking
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.get('/api/legal/expenses', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { caseId, invoiced, limit = '50', offset = '0' } = c.req.query();
+  try {
+    const expenses = await getExpensesByTenant(
+      c.env.DB, tenantId,
+      {
+        caseId,
+        invoiced: invoiced !== undefined ? invoiced === 'true' : undefined
+      },
+      parseInt(limit), parseInt(offset)
+    );
+    return c.json<ApiResponse>(ok(expenses));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to fetch expenses']), 500);
+  }
+});
+
+app.get('/api/legal/expenses/case/:caseId', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { caseId } = c.req.param();
+  try {
+    const expenses = await getExpensesByCase(c.env.DB, tenantId, caseId);
+    return c.json<ApiResponse>(ok(expenses));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to fetch case expenses']), 500);
+  }
+});
+
+app.post('/api/legal/expenses', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const userId = c.get('userId' as never) as string;
+  try {
+    const body = await c.req.json<{
+      caseId: string;
+      category: string;
+      description: string;
+      amountNaira: number;
+      receiptUrl?: string;
+      expenseDate?: number;
+    }>();
+    if (!body.caseId || !body.category || !body.description || !body.amountNaira) {
+      return c.json<ApiResponse>(fail(['caseId, category, description, amountNaira are required']), 400);
+    }
+    const now = Date.now();
+    const expense: MatterExpense = {
+      id: generateId(),
+      tenantId,
+      caseId: body.caseId,
+      category: body.category as MatterExpense['category'],
+      description: body.description,
+      amountKobo: Math.round(body.amountNaira * 100),
+      currency: 'NGN',
+      receiptUrl: body.receiptUrl ?? null,
+      recordedBy: userId,
+      expenseDate: body.expenseDate ?? now,
+      invoiced: false,
+      invoiceId: null,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null
+    };
+    await insertExpense(c.env.DB, expense);
+    return c.json<ApiResponse>(ok(expense), 201);
+  } catch (error) {
+    logger.error('Insert expense failed', { tenantId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to record expense']), 500);
+  }
+});
+
+app.delete('/api/legal/expenses/:id', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { id } = c.req.param();
+  try {
+    await softDeleteExpense(c.env.DB, tenantId, id);
+    return c.json<ApiResponse>(ok({ deleted: true }));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to delete expense']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLIENT INTAKE FORMS
+// Blueprint Reference: Part 10.8 — Client Intake Forms
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.get('/api/legal/intake/forms', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  try {
+    const forms = await getIntakeFormsByTenant(c.env.DB, tenantId);
+    return c.json<ApiResponse>(ok(forms));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to fetch intake forms']), 500);
+  }
+});
+
+app.get('/api/legal/intake/forms/:id', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { id } = c.req.param();
+  try {
+    const form = await getIntakeFormById(c.env.DB, tenantId, id);
+    if (!form) return c.json<ApiResponse>(fail(['Intake form not found']), 404);
+    return c.json<ApiResponse>(ok(form));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to fetch intake form']), 500);
+  }
+});
+
+app.post('/api/legal/intake/forms', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const userId = c.get('userId' as never) as string;
+  try {
+    const body = await c.req.json<{
+      title: string; description?: string; fields: unknown[];
+    }>();
+    if (!body.title || !body.fields) {
+      return c.json<ApiResponse>(fail(['title and fields are required']), 400);
+    }
+    const now = Date.now();
+    const form: ClientIntakeForm = {
+      id: generateId(),
+      tenantId,
+      title: body.title,
+      description: body.description ?? null,
+      fields: JSON.stringify(body.fields),
+      isActive: true,
+      createdBy: userId,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null
+    };
+    await insertIntakeForm(c.env.DB, form);
+    return c.json<ApiResponse>(ok({ ...form, fields: body.fields }), 201);
+  } catch (error) {
+    logger.error('Create intake form failed', { tenantId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to create intake form']), 500);
+  }
+});
+
+app.patch('/api/legal/intake/forms/:id', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { id } = c.req.param();
+  try {
+    const body = await c.req.json<Partial<{ title: string; description: string; fields: unknown[]; isActive: boolean }>>();
+    await updateIntakeForm(c.env.DB, tenantId, id, {
+      title: body.title,
+      description: body.description,
+      fields: body.fields !== undefined ? JSON.stringify(body.fields) : undefined,
+      isActive: body.isActive
+    });
+    const updated = await getIntakeFormById(c.env.DB, tenantId, id);
+    return c.json<ApiResponse>(ok(updated));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to update intake form']), 500);
+  }
+});
+
+app.delete('/api/legal/intake/forms/:id', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { id } = c.req.param();
+  try {
+    await softDeleteIntakeForm(c.env.DB, tenantId, id);
+    return c.json<ApiResponse>(ok({ deleted: true }));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to delete intake form']), 500);
+  }
+});
+
+app.get('/api/legal/intake/submissions', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { formId, status, limit = '50', offset = '0' } = c.req.query();
+  try {
+    const submissions = await getIntakeSubmissionsByTenant(
+      c.env.DB, tenantId, { formId, status }, parseInt(limit), parseInt(offset)
+    );
+    return c.json<ApiResponse>(ok(submissions));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to fetch submissions']), 500);
+  }
+});
+
+app.post('/api/legal/intake/submit/:formId', async (c) => {
+  const { formId } = c.req.param();
+  const tenantId = c.req.header('X-Tenant-ID') ?? '';
+  try {
+    const body = await c.req.json<{
+      submitterName: string;
+      submitterEmail?: string;
+      submitterPhone?: string;
+      responses: Record<string, unknown>;
+    }>();
+    if (!body.submitterName || !body.responses) {
+      return c.json<ApiResponse>(fail(['submitterName and responses are required']), 400);
+    }
+    const form = await getIntakeFormById(c.env.DB, tenantId, formId);
+    if (!form || !form.isActive) {
+      return c.json<ApiResponse>(fail(['Form not found or inactive']), 404);
+    }
+    const now = Date.now();
+    const submission: ClientIntakeSubmission = {
+      id: generateId(),
+      tenantId,
+      formId,
+      submitterName: body.submitterName,
+      submitterEmail: body.submitterEmail ?? null,
+      submitterPhone: body.submitterPhone ?? null,
+      responses: JSON.stringify(body.responses),
+      status: 'PENDING',
+      reviewedBy: null,
+      reviewedAt: null,
+      clientId: null,
+      createdAt: now,
+      updatedAt: now
+    };
+    await insertIntakeSubmission(c.env.DB, submission);
+    return c.json<ApiResponse>(ok({ submissionId: submission.id, message: 'Submission received successfully' }), 201);
+  } catch (error) {
+    logger.error('Intake submission failed', { formId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to submit form']), 500);
+  }
+});
+
+app.patch('/api/legal/intake/submissions/:id/review', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const userId = c.get('userId' as never) as string;
+  const { id } = c.req.param();
+  try {
+    const body = await c.req.json<{ status: string; clientId?: string }>();
+    if (!['REVIEWED', 'CONVERTED', 'REJECTED'].includes(body.status)) {
+      return c.json<ApiResponse>(fail(['Invalid status']), 400);
+    }
+    await updateIntakeSubmissionStatus(c.env.DB, tenantId, id, body.status, userId, body.clientId);
+    const updated = await getIntakeSubmissionById(c.env.DB, tenantId, id);
+    return c.json<ApiResponse>(ok(updated));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to update submission']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI CONTRACT ANALYSIS
+// Blueprint Reference: Part 10.8 — AI Contract Analysis
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.post('/api/legal/ai/analyze/:documentId', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const userId = c.get('userId' as never) as string;
+  const { documentId } = c.req.param();
+  try {
+    const body = await c.req.json<{ caseId: string; documentText: string; documentTitle?: string }>();
+    if (!body.caseId || !body.documentText) {
+      return c.json<ApiResponse>(fail(['caseId and documentText are required']), 400);
+    }
+    const now = Date.now();
+    const analysis: DocumentAnalysis = {
+      id: generateId(),
+      tenantId,
+      documentId,
+      caseId: body.caseId,
+      analysisType: 'CONTRACT_REVIEW',
+      status: 'PROCESSING',
+      summary: null,
+      riskyClauses: null,
+      keyTerms: null,
+      recommendations: null,
+      rawResponse: null,
+      analyzedBy: userId,
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now
+    };
+    await insertDocumentAnalysis(c.env.DB, analysis);
+
+    const result = await analyzeContract(
+      { AI_API_URL: c.env.AI_API_URL, AI_API_KEY: c.env.AI_API_KEY, AI_MODEL: c.env.AI_MODEL },
+      body.documentText,
+      body.documentTitle ?? 'Legal Document'
+    );
+
+    if (result) {
+      await updateDocumentAnalysis(c.env.DB, tenantId, analysis.id, {
+        status: 'COMPLETED',
+        summary: result.summary,
+        riskyClauses: JSON.stringify(result.riskyClauses),
+        keyTerms: JSON.stringify(result.keyTerms),
+        recommendations: JSON.stringify(result.recommendations),
+        completedAt: Date.now()
+      });
+      return c.json<ApiResponse>(ok({
+        analysisId: analysis.id,
+        status: 'COMPLETED',
+        summary: result.summary,
+        riskyClauses: result.riskyClauses,
+        keyTerms: result.keyTerms,
+        recommendations: result.recommendations
+      }));
+    } else {
+      await updateDocumentAnalysis(c.env.DB, tenantId, analysis.id, {
+        status: 'FAILED',
+        rawResponse: 'AI platform not configured or unavailable'
+      });
+      return c.json<ApiResponse>(ok({
+        analysisId: analysis.id,
+        status: 'FAILED',
+        message: 'AI analysis unavailable. Configure AI_API_URL and AI_API_KEY environment variables.'
+      }));
+    }
+  } catch (error) {
+    logger.error('AI analysis failed', { tenantId, documentId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Document analysis failed']), 500);
+  }
+});
+
+app.get('/api/legal/ai/analyses/case/:caseId', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { caseId } = c.req.param();
+  try {
+    const analyses = await getAnalysisByCase(c.env.DB, tenantId, caseId);
+    return c.json<ApiResponse>(ok(analyses.map(a => ({
+      ...a,
+      riskyClauses: a.riskyClauses ? JSON.parse(a.riskyClauses) as unknown[] : [],
+      keyTerms: a.keyTerms ? JSON.parse(a.keyTerms) as unknown[] : [],
+      recommendations: a.recommendations ? JSON.parse(a.recommendations) as unknown[] : []
+    }))));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to fetch analyses']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOCUMENT TEMPLATES & ASSEMBLY
+// Blueprint Reference: Part 10.8 — Document Assembly
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.get('/api/legal/templates', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  try {
+    const templates = await getTemplatesByTenant(c.env.DB, tenantId);
+    return c.json<ApiResponse>(ok(templates.map(t => ({
+      ...t,
+      variables: JSON.parse(t.variables) as unknown[]
+    }))));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to fetch templates']), 500);
+  }
+});
+
+app.get('/api/legal/templates/:id', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { id } = c.req.param();
+  try {
+    const template = await getTemplateById(c.env.DB, tenantId, id);
+    if (!template) return c.json<ApiResponse>(fail(['Template not found']), 404);
+    return c.json<ApiResponse>(ok({ ...template, variables: JSON.parse(template.variables) as unknown[] }));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to fetch template']), 500);
+  }
+});
+
+app.post('/api/legal/templates', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const userId = c.get('userId' as never) as string;
+  try {
+    const body = await c.req.json<{
+      title: string; templateType: string; content: string; variables: string[];
+    }>();
+    if (!body.title || !body.templateType || !body.content) {
+      return c.json<ApiResponse>(fail(['title, templateType, content are required']), 400);
+    }
+    const now = Date.now();
+    const template: DocumentTemplate = {
+      id: generateId(),
+      tenantId,
+      title: body.title,
+      templateType: body.templateType as DocumentTemplate['templateType'],
+      content: body.content,
+      variables: JSON.stringify(body.variables ?? []),
+      isActive: true,
+      createdBy: userId,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null
+    };
+    await insertDocumentTemplate(c.env.DB, template);
+    return c.json<ApiResponse>(ok({ ...template, variables: body.variables ?? [] }), 201);
+  } catch (error) {
+    logger.error('Create template failed', { tenantId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to create template']), 500);
+  }
+});
+
+app.patch('/api/legal/templates/:id', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { id } = c.req.param();
+  try {
+    const body = await c.req.json<Partial<{ title: string; content: string; variables: string[]; isActive: boolean }>>();
+    await updateDocumentTemplate(c.env.DB, tenantId, id, {
+      title: body.title,
+      content: body.content,
+      variables: body.variables !== undefined ? JSON.stringify(body.variables) : undefined,
+      isActive: body.isActive
+    });
+    const updated = await getTemplateById(c.env.DB, tenantId, id);
+    return c.json<ApiResponse>(ok(updated));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to update template']), 500);
+  }
+});
+
+app.delete('/api/legal/templates/:id', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { id } = c.req.param();
+  try {
+    await softDeleteTemplate(c.env.DB, tenantId, id);
+    return c.json<ApiResponse>(ok({ deleted: true }));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to delete template']), 500);
+  }
+});
+
+app.post('/api/legal/templates/:id/assemble', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { id } = c.req.param();
+  try {
+    const body = await c.req.json<{ variables: Record<string, string> }>();
+    const template = await getTemplateById(c.env.DB, tenantId, id);
+    if (!template) return c.json<ApiResponse>(fail(['Template not found']), 404);
+    const assembled = assembleDocumentFromTemplate(template.content, body.variables ?? {});
+    return c.json<ApiResponse>(ok({
+      templateId: id,
+      templateTitle: template.title,
+      assembledContent: assembled,
+      wordCount: assembled.split(/\s+/).length
+    }));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to assemble document']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// E-SIGNATURE REQUESTS
+// Blueprint Reference: Part 10.8 — E-Signature Integration
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.get('/api/legal/esignatures/case/:caseId', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { caseId } = c.req.param();
+  try {
+    const signatures = await getESignaturesByCase(c.env.DB, tenantId, caseId);
+    return c.json<ApiResponse>(ok(signatures));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to fetch e-signature requests']), 500);
+  }
+});
+
+app.post('/api/legal/esignatures', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const userId = c.get('userId' as never) as string;
+  try {
+    const body = await c.req.json<{
+      documentId: string; caseId: string;
+      signerName: string; signerEmail: string; signerPhone?: string;
+      expiresInDays?: number;
+    }>();
+    if (!body.documentId || !body.caseId || !body.signerName || !body.signerEmail) {
+      return c.json<ApiResponse>(fail(['documentId, caseId, signerName, signerEmail are required']), 400);
+    }
+    const now = Date.now();
+    const expiresAt = now + (body.expiresInDays ?? 30) * 86400000;
+    const accessToken = generateId() + generateId();
+    const request: ESignatureRequest = {
+      id: generateId(),
+      tenantId,
+      documentId: body.documentId,
+      caseId: body.caseId,
+      requestedBy: userId,
+      signerName: body.signerName,
+      signerEmail: body.signerEmail,
+      signerPhone: body.signerPhone ?? null,
+      status: 'PENDING',
+      signedAt: null,
+      declinedAt: null,
+      expiresAt,
+      signatureData: null,
+      accessToken,
+      createdAt: now,
+      updatedAt: now
+    };
+    await insertESignatureRequest(c.env.DB, request);
+    return c.json<ApiResponse>(ok({ ...request, signingUrl: `/sign/${accessToken}` }), 201);
+  } catch (error) {
+    logger.error('Create e-signature failed', { tenantId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to create e-signature request']), 500);
+  }
+});
+
+app.post('/api/legal/esignatures/sign/:token', async (c) => {
+  const { token } = c.req.param();
+  try {
+    const body = await c.req.json<{ signatureData: string; action: 'SIGN' | 'DECLINE' }>();
+    const request = await getESignatureByToken(c.env.DB, token);
+    if (!request) return c.json<ApiResponse>(fail(['Signing request not found']), 404);
+    if (request.status !== 'PENDING' && request.status !== 'SENT' && request.status !== 'VIEWED') {
+      return c.json<ApiResponse>(fail([`Request is already ${request.status}`]), 400);
+    }
+    if (Date.now() > request.expiresAt) {
+      await updateESignatureStatus(c.env.DB, request.id, 'EXPIRED');
+      return c.json<ApiResponse>(fail(['Signing request has expired']), 410);
+    }
+    const now = Date.now();
+    if (body.action === 'SIGN') {
+      await updateESignatureStatus(c.env.DB, request.id, 'SIGNED', now, undefined, body.signatureData);
+      return c.json<ApiResponse>(ok({ signed: true, signedAt: now }));
+    } else {
+      await updateESignatureStatus(c.env.DB, request.id, 'DECLINED', undefined, now);
+      return c.json<ApiResponse>(ok({ declined: true, declinedAt: now }));
+    }
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to process signature']), 500);
+  }
+});
+
+app.get('/api/legal/esignatures/view/:token', async (c) => {
+  const { token } = c.req.param();
+  try {
+    const request = await getESignatureByToken(c.env.DB, token);
+    if (!request) return c.json<ApiResponse>(fail(['Signing request not found']), 404);
+    if (request.status === 'PENDING') {
+      await updateESignatureStatus(c.env.DB, request.id, 'VIEWED');
+    }
+    return c.json<ApiResponse>(ok({
+      id: request.id,
+      signerName: request.signerName,
+      status: request.status,
+      expiresAt: request.expiresAt,
+      documentId: request.documentId
+    }));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to view signing request']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECURE CLIENT PORTAL
+// Blueprint Reference: Part 10.8 — Secure Client Portal
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.post('/api/legal/portal/access/:clientId', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  try {
+    const client = await getClientById(c.env.DB, tenantId, c.req.param('clientId'));
+    if (!client) return c.json<ApiResponse>(fail(['Client not found']), 404);
+    await revokePortalToken(c.env.DB, tenantId, client.id);
+    const now = Date.now();
+    const portalToken: ClientPortalToken = {
+      id: generateId(),
+      tenantId,
+      clientId: client.id,
+      token: generateId() + generateId() + generateId(),
+      expiresAt: now + 30 * 86400000,
+      lastUsedAt: null,
+      isRevoked: false,
+      createdAt: now
+    };
+    await insertPortalToken(c.env.DB, portalToken);
+    return c.json<ApiResponse>(ok({
+      accessToken: portalToken.token,
+      expiresAt: portalToken.expiresAt,
+      portalUrl: `/client-portal/${portalToken.token}`
+    }));
+  } catch (error) {
+    logger.error('Create portal token failed', { tenantId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to create portal access']), 500);
+  }
+});
+
+app.get('/api/legal/portal/me', async (c) => {
+  const authHeader = c.req.header('X-Portal-Token');
+  if (!authHeader) return c.json<ApiResponse>(fail(['Portal token required']), 401);
+  try {
+    const tokenRecord = await getPortalTokenByValue(c.env.DB, authHeader);
+    if (!tokenRecord || tokenRecord.isRevoked || Date.now() > tokenRecord.expiresAt) {
+      return c.json<ApiResponse>(fail(['Invalid or expired portal token']), 401);
+    }
+    await touchPortalToken(c.env.DB, tokenRecord.id);
+    const client = await getClientById(c.env.DB, tokenRecord.tenantId, tokenRecord.clientId);
+    if (!client) return c.json<ApiResponse>(fail(['Client not found']), 404);
+    const [cases, invoices] = await Promise.all([
+      getCasesByTenant(c.env.DB, tokenRecord.tenantId, {}, 20, 0),
+      getInvoicesByTenant(c.env.DB, tokenRecord.tenantId, {}, 20, 0)
+    ]);
+    const clientCases = cases.filter(cs => cs.clientId === client.id);
+    const clientInvoices = invoices.filter(inv => inv.clientId === client.id);
+    return c.json<ApiResponse>(ok({
+      client: { id: client.id, fullName: client.fullName, phone: client.phone, email: client.email },
+      cases: clientCases.map(cs => ({
+        id: cs.id, title: cs.title, status: cs.status,
+        caseReference: cs.caseReference, nextHearingDate: cs.nextHearingDate
+      })),
+      invoices: clientInvoices.map(inv => ({
+        id: inv.id, invoiceNumber: inv.invoiceNumber, totalKobo: inv.totalKobo,
+        status: inv.status, dueDate: inv.dueDate
+      }))
+    }));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Portal access failed']), 500);
+  }
+});
+
+app.post('/api/legal/portal/revoke/:clientId', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { clientId } = c.req.param();
+  try {
+    await revokePortalToken(c.env.DB, tenantId, clientId);
+    return c.json<ApiResponse>(ok({ revoked: true }));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to revoke portal access']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECURE MESSAGING
+// Blueprint Reference: Part 10.8 — Secure Messaging
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.get('/api/legal/messages/case/:caseId', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { caseId } = c.req.param();
+  const { limit = '100', offset = '0' } = c.req.query();
+  try {
+    const messages = await getMessagesByCase(c.env.DB, tenantId, caseId, parseInt(limit), parseInt(offset));
+    return c.json<ApiResponse>(ok(messages));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to fetch messages']), 500);
+  }
+});
+
+app.get('/api/legal/messages/unread', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const userId = c.get('userId' as never) as string;
+  try {
+    const count = await getUnreadMessageCount(c.env.DB, tenantId, userId);
+    return c.json<ApiResponse>(ok({ unreadCount: count }));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to fetch unread count']), 500);
+  }
+});
+
+app.post('/api/legal/messages', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const userId = c.get('userId' as never) as string;
+  try {
+    const body = await c.req.json<{
+      caseId: string; recipientId: string; senderType?: string;
+      subject?: string; body: string; parentMessageId?: string;
+    }>();
+    if (!body.caseId || !body.recipientId || !body.body) {
+      return c.json<ApiResponse>(fail(['caseId, recipientId, body are required']), 400);
+    }
+    const now = Date.now();
+    const message: ClientMessage = {
+      id: generateId(),
+      tenantId,
+      caseId: body.caseId,
+      senderId: userId,
+      senderType: (body.senderType as ClientMessage['senderType']) ?? 'ATTORNEY',
+      recipientId: body.recipientId,
+      subject: body.subject ?? null,
+      body: body.body,
+      isRead: false,
+      readAt: null,
+      parentMessageId: body.parentMessageId ?? null,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null
+    };
+    await insertMessage(c.env.DB, message);
+    return c.json<ApiResponse>(ok(message), 201);
+  } catch (error) {
+    logger.error('Send message failed', { tenantId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to send message']), 500);
+  }
+});
+
+app.post('/api/legal/messages/:id/read', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { id } = c.req.param();
+  try {
+    await markMessageRead(c.env.DB, tenantId, id);
+    return c.json<ApiResponse>(ok({ read: true }));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to mark message read']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFLICT OF INTEREST CHECKER
+// Blueprint Reference: Part 10.8 — Conflict of Interest Checker
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.post('/api/legal/conflict-check', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  try {
+    const body = await c.req.json<{
+      fullName: string; phone?: string; email?: string;
+    }>();
+    if (!body.fullName) {
+      return c.json<ApiResponse>(fail(['fullName is required']), 400);
+    }
+    const conflicts = await checkConflictOfInterest(
+      c.env.DB, tenantId, body.fullName, body.phone ?? '', body.email ?? null
+    );
+    return c.json<ApiResponse>(ok({
+      hasConflict: conflicts.length > 0,
+      conflicts,
+      checked: { fullName: body.fullName, phone: body.phone, email: body.email }
+    }));
+  } catch (error) {
+    logger.error('Conflict check failed', { tenantId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Conflict check failed']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COURT CALENDAR — iCal Export
+// Blueprint Reference: Part 10.8 — Court Calendar Sync
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.get('/api/legal/calendar/ical', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  try {
+    const cases = await getCasesByTenant(c.env.DB, tenantId, {}, 500, 0);
+    const activeCases = cases.filter(cs =>
+      ['INTAKE','ACTIVE','PENDING_COURT','ADJOURNED'].includes(cs.status) && cs.nextHearingDate
+    );
+
+    let ical = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//WebWaka Professional//Legal Practice//EN',
+      'CALSCALE:GREGORIAN',
+      'METHOD:PUBLISH',
+      'X-WR-CALNAME:WebWaka Court Dates',
+      'X-WR-TIMEZONE:Africa/Lagos'
+    ].join('\r\n');
+
+    for (const cs of activeCases) {
+      if (!cs.nextHearingDate) continue;
+      const hearingDate = new Date(cs.nextHearingDate);
+      const dtStart = formatICalDate(hearingDate);
+      const uid = `${cs.id}-hearing@webwaka.pro`;
+      ical += '\r\n' + [
+        'BEGIN:VEVENT',
+        `UID:${uid}`,
+        `DTSTART:${dtStart}`,
+        `DTEND:${formatICalDate(new Date(cs.nextHearingDate + 3600000))}`,
+        `SUMMARY:${escapeICalText(`Court: ${cs.title}`)}`,
+        `DESCRIPTION:${escapeICalText(`Case Ref: ${cs.caseReference}\\nCourt: ${cs.courtName ?? 'TBC'}\\nSuit No: ${cs.suitNumber ?? 'N/A'}`)}`,
+        `LOCATION:${escapeICalText(cs.courtName ?? 'TBC')}`,
+        `STATUS:CONFIRMED`,
+        `TRANSP:OPAQUE`,
+        'END:VEVENT'
+      ].join('\r\n');
+    }
+
+    ical += '\r\nEND:VCALENDAR';
+
+    return new Response(ical, {
+      headers: {
+        'Content-Type': 'text/calendar; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="webwaka-court-calendar.ics"'
+      }
+    });
+  } catch (error) {
+    logger.error('Calendar export failed', { tenantId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Calendar export failed']), 500);
+  }
+});
+
+function formatICalDate(date: Date): string {
+  return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+}
+function escapeICalText(text: string): string {
+  return text.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PERFORMANCE ANALYTICS
+// Blueprint Reference: Part 10.8 — Performance Analytics
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.get('/api/legal/analytics/attorneys', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { startDate, endDate } = c.req.query();
+  try {
+    const now = Date.now();
+    const start = startDate ? parseInt(startDate) : now - 30 * 86400000;
+    const end = endDate ? parseInt(endDate) : now;
+    const analytics = await getAttorneyAnalytics(c.env.DB, tenantId, start, end);
+    return c.json<ApiResponse>(ok({
+      period: { start, end },
+      attorneys: analytics.map(a => ({
+        ...a,
+        billableHours: (a.billableMinutes / 60).toFixed(2),
+        totalHours: (a.totalMinutes / 60).toFixed(2),
+        utilizationRate: a.totalMinutes > 0
+          ? ((a.billableMinutes / a.totalMinutes) * 100).toFixed(1)
+          : '0.0',
+        totalBilledNaira: a.totalBilledKobo / 100
+      }))
+    }));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to fetch attorney analytics']), 500);
+  }
+});
+
+app.get('/api/legal/analytics/revenue', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { months = '6' } = c.req.query();
+  try {
+    const revenue = await getMonthlyRevenue(c.env.DB, tenantId, parseInt(months));
+    return c.json<ApiResponse>(ok({
+      months: revenue.map(r => ({
+        ...r,
+        invoicedNaira: r.invoicedKobo / 100,
+        collectedNaira: r.collectedKobo / 100,
+        outstandingNaira: r.outstandingKobo / 100,
+        collectionRate: r.invoicedKobo > 0
+          ? ((r.collectedKobo / r.invoicedKobo) * 100).toFixed(1)
+          : '0.0'
+      }))
+    }));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to fetch revenue analytics']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPLIANCE REPORTING
+// Blueprint Reference: Part 10.8 — Compliance Reporting
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.get('/api/legal/compliance/report', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  try {
+    const report = await generateNBAComplianceReport(c.env.DB, tenantId);
+    return c.json<ApiResponse>(ok({
+      ...report,
+      totalTrustBalanceNaira: report.totalTrustBalanceKobo / 100,
+      generatedAt: new Date(report.reportDate).toISOString(),
+      complianceStatus: {
+        nbaVerification: report.verifiedAttorneys === report.totalAttorneys
+          ? 'COMPLIANT' : 'ATTENTION_NEEDED',
+        expiringCertificates: report.expiringCertificates > 0
+          ? 'ATTENTION_NEEDED' : 'COMPLIANT',
+        trustAccounts: report.totalTrustAccounts > 0
+          ? 'COMPLIANT' : 'NOT_APPLICABLE'
+      }
+    }));
+  } catch (error) {
+    logger.error('Compliance report failed', { tenantId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Failed to generate compliance report']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTOMATED REMINDERS / NOTIFICATION SCHEDULES
+// Blueprint Reference: Part 10.8 — Automated Reminders
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.post('/api/legal/reminders', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  try {
+    const body = await c.req.json<{
+      entityType: string; entityId: string;
+      notificationType: string; message: string;
+      scheduledFor: number; recipientPhone?: string; recipientEmail?: string;
+    }>();
+    if (!body.entityType || !body.entityId || !body.notificationType || !body.message || !body.scheduledFor) {
+      return c.json<ApiResponse>(fail(['entityType, entityId, notificationType, message, scheduledFor are required']), 400);
+    }
+    const now = Date.now();
+    const schedule: NotificationSchedule = {
+      id: generateId(),
+      tenantId,
+      entityType: body.entityType,
+      entityId: body.entityId,
+      notificationType: body.notificationType as NotificationSchedule['notificationType'],
+      recipientPhone: body.recipientPhone ?? null,
+      recipientEmail: body.recipientEmail ?? null,
+      message: body.message,
+      scheduledFor: body.scheduledFor,
+      sentAt: null,
+      status: 'PENDING',
+      createdAt: now,
+      updatedAt: now
+    };
+    await insertNotificationSchedule(c.env.DB, schedule);
+    return c.json<ApiResponse>(ok(schedule), 201);
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to schedule reminder']), 500);
+  }
+});
+
+app.get('/api/legal/reminders/:entityType/:entityId', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { entityType, entityId } = c.req.param();
+  try {
+    const schedules = await getScheduledNotificationsByEntity(c.env.DB, tenantId, entityType, entityId);
+    return c.json<ApiResponse>(ok(schedules));
+  } catch (error) {
+    return c.json<ApiResponse>(fail(['Failed to fetch reminders']), 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACCOUNTING EXPORT (Xero/QuickBooks compatible CSV)
+// Blueprint Reference: Part 10.8 — Integration with Accounting Software
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.get('/api/legal/accounting/export', async (c) => {
+  const tenantId = c.get('tenantId' as never) as string;
+  const { format = 'csv', startDate, endDate } = c.req.query();
+  try {
+    const now = Date.now();
+    const start = startDate ? parseInt(startDate) : now - 90 * 86400000;
+    const end = endDate ? parseInt(endDate) : now;
+    const [invoices, clients] = await Promise.all([
+      getInvoicesByTenant(c.env.DB, tenantId, {}, 1000, 0),
+      getClientsByTenant(c.env.DB, tenantId, {}, 1000, 0)
+    ]);
+    const clientMap = new Map(clients.map(cl => [cl.id, cl]));
+    const filtered = invoices.filter(inv => inv.createdAt >= start && inv.createdAt <= end);
+
+    if (format === 'json') {
+      return c.json<ApiResponse>(ok({
+        exportedAt: now,
+        period: { start, end },
+        invoices: filtered.map(inv => ({
+          invoiceNumber: inv.invoiceNumber,
+          clientName: clientMap.get(inv.clientId)?.fullName ?? 'Unknown',
+          status: inv.status,
+          subtotalNaira: inv.subtotalKobo / 100,
+          vatNaira: inv.vatKobo / 100,
+          totalNaira: inv.totalKobo / 100,
+          dueDate: new Date(inv.dueDate).toISOString().split('T')[0],
+          paidAt: inv.paidAt ? new Date(inv.paidAt).toISOString().split('T')[0] : null
+        }))
+      }));
+    }
+
+    const header = '*InvoiceNumber,*ContactName,*InvoiceDate,*DueDate,*Total,*TaxAmount,*CurrencyCode,InvoiceStatus,PaymentReference\n';
+    const rows = filtered.map(inv => {
+      const client = clientMap.get(inv.clientId);
+      return [
+        inv.invoiceNumber,
+        `"${client?.fullName ?? 'Unknown'}"`,
+        new Date(inv.createdAt).toISOString().split('T')[0],
+        new Date(inv.dueDate).toISOString().split('T')[0],
+        (inv.totalKobo / 100).toFixed(2),
+        (inv.vatKobo / 100).toFixed(2),
+        'NGN',
+        inv.status,
+        inv.paymentReference ?? ''
+      ].join(',');
+    }).join('\n');
+    const csv = header + rows;
+
+    return new Response(csv, {
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="webwaka-invoices-${new Date(now).toISOString().split('T')[0]}.csv"`
+      }
+    });
+  } catch (error) {
+    logger.error('Accounting export failed', { tenantId, error: String(error) });
+    return c.json<ApiResponse>(fail(['Accounting export failed']), 500);
   }
 });
 

@@ -17,6 +17,13 @@ export interface LegalTranslations {
     documents: string;
     nbaCompliance: string;
     trustAccounts: string;
+    tasks: string;
+    expenses: string;
+    intake: string;
+    templates: string;
+    messages: string;
+    analytics: string;
+    compliance: string;
   };
   // Dashboard
   dashboard: {
@@ -226,7 +233,14 @@ const translations: Record<Language, LegalTranslations> = {
       invoices: 'Invoices',
       documents: 'Documents',
       nbaCompliance: 'NBA Compliance',
-      trustAccounts: 'Trust Accounts'
+      trustAccounts: 'Trust Accounts',
+      tasks: 'Tasks',
+      expenses: 'Expenses',
+      intake: 'Client Intake',
+      templates: 'Templates',
+      messages: 'Messages',
+      analytics: 'Analytics',
+      compliance: 'Compliance'
     },
     dashboard: {
       title: 'Legal Practice Dashboard',
@@ -426,7 +440,14 @@ const translations: Record<Language, LegalTranslations> = {
       invoices: 'Awọn Ìwé Ìsanwó',
       documents: 'Awọn Iwe',
       nbaCompliance: 'Ibamu NBA',
-      trustAccounts: 'Awọn Akọọlẹ Igbẹkẹle'
+      trustAccounts: 'Awọn Akọọlẹ Igbẹkẹle',
+      tasks: 'Awọn Iṣẹ',
+      expenses: 'Awọn Ìnáwó',
+      intake: 'Gbigba Alabara',
+      templates: 'Awọn Awoṣe',
+      messages: 'Awọn Ifiranṣẹ',
+      analytics: 'Itupalẹ',
+      compliance: 'Ibamu'
     },
     dashboard: {
       title: 'Pẹpẹ Iṣẹ Ofin',
@@ -626,7 +647,14 @@ const translations: Record<Language, LegalTranslations> = {
       invoices: 'Ụgwọ',
       documents: 'Akwụkwọ',
       nbaCompliance: 'Ịdabara NBA',
-      trustAccounts: 'Akantị Ntụkwasiobi'
+      trustAccounts: 'Akantị Ntụkwasiobi',
+      tasks: 'Ọrụ',
+      expenses: 'Mmefu Ego',
+      intake: 'Nnata Ndị Ahịa',
+      templates: 'Ihe Nchụta',
+      messages: 'Ozi',
+      analytics: 'Nyocha',
+      compliance: 'Ịdabara'
     },
     dashboard: {
       title: 'Ọchịchọ Ọrụ Iwu',
@@ -826,7 +854,14 @@ const translations: Record<Language, LegalTranslations> = {
       invoices: 'Takardar Biya',
       documents: 'Takardun',
       nbaCompliance: 'Bin Doka NBA',
-      trustAccounts: 'Asusun Amana'
+      trustAccounts: 'Asusun Amana',
+      tasks: 'Ayyuka',
+      expenses: 'Kashewa',
+      intake: 'Karbar Abokin Ciniki',
+      templates: 'Samfurori',
+      messages: 'Saƙonni',
+      analytics: 'Nazari',
+      compliance: 'Bin Doka'
     },
     dashboard: {
       title: 'Allon Ayyukan Shari\'a',
