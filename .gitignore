@@ -112,3 +112,5 @@ temp/
 # Cloudflare Wrangler
 .wrangler/
 
+# Local secrets — never commit
+.dev.vars
