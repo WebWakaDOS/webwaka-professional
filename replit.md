@@ -46,6 +46,9 @@ src/
     sync/
       client.ts                 # LegalPracticeOfflineDB + EventManagementOfflineDB + SyncManager
   modules/
+    matters/                    # QA-certified Legal Matters module (QA-PRO-1 through QA-PRO-4)
+      api.ts                    # Hono API (routes at /api/matters/*) — CRUD, billing, AI analysis
+      matters.test.ts           # 73-test suite covering CRUD, RBAC, billing, AI graceful degradation
     legal-practice/             # Client mgmt, case tracking, hearings, billing, NBA compliance
       api/index.ts              # Hono API (routes at /api/legal/*) — notifies on invoice.paid
       db/queries.ts             # D1 queries (re-exports D1Database from core)
