@@ -6,3 +6,9 @@ id = "IgPtuRBe4rDyRxPZHof4O"
 uri = "file://WEBWAKA-PRO-RESEARCH-REPORT.md"
 type = "text"
 title = "WebWaka Professional — Research Report & Implementation Plan"
+
+[[outputs]]
+id = "Jd1tE1Ny54zf0rOqPil8G"
+uri = "file://WEBWAKA-PRO-DEEP-RESEARCH-TASKBOOK.md"
+type = "text"
+title = "WEBWAKA-PRO Deep Research + Enhancement Taskbook + QA Prompt Factory"
