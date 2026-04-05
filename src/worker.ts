@@ -33,7 +33,8 @@ export interface Env {
   JWT_SECRET: string;
   ENVIRONMENT?: string;
   RATE_LIMIT_KV?: KVNamespace;
-  EVENT_BUS_URL?: string;
+  EVENT_BUS_URL?: string
+  PROFESSIONAL_EVENTS?: { send(msg: unknown): Promise<void> };
   EVENT_BUS_API_KEY?: string;
   PAYSTACK_SECRET_KEY?: string;
   TERMII_API_KEY?: string;
