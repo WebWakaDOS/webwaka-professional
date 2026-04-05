@@ -19,8 +19,8 @@ kv_namespaces = [
 ]
 [[env.staging.d1_databases]]
 binding = "DB"
-database_name = "modules_prod"
-database_id = "ee93377c-8000-45d6-ae54-f0d4c588bf04"
+database_name = "webwaka-professional-db"
+database_id = "REPLACE_WITH_PROFESSIONAL_DB_ID"
 
 [[env.staging.r2_buckets]]
 binding = "DOCUMENTS"
@@ -42,8 +42,8 @@ kv_namespaces = [
 ]
 [[env.production.d1_databases]]
 binding = "DB"
-database_name = "modules_prod"
-database_id = "ee93377c-8000-45d6-ae54-f0d4c588bf04"
+database_name = "webwaka-professional-db"
+database_id = "REPLACE_WITH_PROFESSIONAL_DB_ID"
 
 [[env.production.r2_buckets]]
 binding = "DOCUMENTS"
