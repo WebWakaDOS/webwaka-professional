@@ -1,24 +1,19 @@
 /**
- * WebWaka Platform Event Bus — CORE-2 Integration
- * Blueprint Reference: Part 5 (Platform Event Bus)
- * Blueprint Reference: Part 9.2 — "Event-Driven: Financial transactions must publish events via the event bus."
+ * WebWaka Professional — Platform Event Bus
+ * Blueprint Reference: Part 5 (Platform Event Bus), Part 9.2
  *
- * Modules communicate via events, never via direct dependencies.
- * This module provides both a local in-process event bus (for testing/offline)
- * and a remote CORE-2 event bus publisher (for production).
+ * Publishing model (standardized to CF Queues — matches commerce pattern):
+ *   Server-side: publishEvent(c.env.PROFESSIONAL_EVENTS, event)
+ *   Dev / tests:  falls back to in-memory eventBus
  *
- * Schema: Unified WebWakaEvent<T> from @webwaka/core/events
- * Ref: EVENT_BUS_SCHEMA.md — event, tenantId, payload, timestamp (number)
+ * DO NOT use HTTP callbacks or raw EVENT_BUS_URL — all events go via CF Queues.
  */
 
 import { createLogger } from '../logger';
 
 const logger = createLogger('event-bus');
 
-// ─────────────────────────────────────────────────────────────────────────────
-// EVENT TYPES — Legal Practice Module
-// Blueprint Reference: Part 5 (Event Examples)
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Event Types ──────────────────────────────────────────────────────────────
 
 export type LegalEventType =
   | 'legal.client.created'
@@ -38,12 +33,8 @@ export type LegalEventType =
 export type EventMgmtEventType =
   | 'event_mgmt.event.created'
   | 'event_mgmt.event.published'
-  | 'event_mgmt.event.registration_opened'
-  | 'event_mgmt.event.registration_closed'
   | 'event_mgmt.event.cancelled'
   | 'event_mgmt.event.completed'
-  | 'event_mgmt.event.updated'
-  | 'event_mgmt.event.banner_uploaded'
   | 'event_mgmt.registration.created'
   | 'event_mgmt.registration.confirmed'
   | 'event_mgmt.registration.payment_confirmed'
@@ -53,115 +44,77 @@ export type EventMgmtEventType =
 export type PlatformEventType = LegalEventType | EventMgmtEventType;
 export type PlatformSourceModule = 'legal_practice' | 'event_management';
 
-/**
- * Unified WebWaka Platform Event Bus Schema (Governance-Mandated).
- *
- * Strictly conforms to the standard WebWakaEvent<T> shape:
- *   event (string), tenantId (string), payload (T), timestamp (number)
- *
- * Legacy fields (id, sourceModule) are moved into the payload object
- * to preserve domain context while conforming to the standard schema.
- *
- * Reference: EVENT_BUS_SCHEMA.md in webwaka-platform-docs
- */
+// ─── Canonical Event Schema ───────────────────────────────────────────────────
+
 export interface WebWakaEvent<T = Record<string, unknown>> {
-  /** The event type in dot-notation (e.g., 'legal.client.created') */
-  event: string;
-  /** The ID of the tenant emitting the event */
+  id: string;
   tenantId: string;
-  /** The event-specific payload (includes id, sourceModule, and domain fields) */
-  payload: T;
-  /** UTC Unix timestamp in milliseconds */
+  type: string;
+  sourceModule: string;
   timestamp: number;
+  payload: T;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LOCAL EVENT BUS (in-process, used for testing and offline scenarios)
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── CF Queue interface (minimal — no hard dep on @cloudflare/workers-types) ──
 
-type EventHandler<T = Record<string, unknown>> = (event: WebWakaEvent<T>) => void | Promise<void>;
-
-class LocalEventBus {
-  private handlers: Map<string, EventHandler[]> = new Map();
-
-  subscribe<T = Record<string, unknown>>(eventType: string, handler: EventHandler<T>): void {
-    const existing = this.handlers.get(eventType) ?? [];
-    this.handlers.set(eventType, [...existing, handler as EventHandler]);
-  }
-
-  async publish<T = Record<string, unknown>>(event: WebWakaEvent<T>): Promise<void> {
-    const handlers = this.handlers.get(event.event) ?? [];
-    await Promise.all(handlers.map(h => h(event as WebWakaEvent)));
-  }
-
-  clearHandlers(): void {
-    this.handlers.clear();
-  }
+export interface EventQueue {
+  send(message: WebWakaEvent): Promise<void>;
 }
 
-export const localEventBus = new LocalEventBus();
+// ─── CF Queues Producer (production) ─────────────────────────────────────────
 
-// ─────────────────────────────────────────────────────────────────────────────
-// REMOTE EVENT BUS PUBLISHER (CORE-2 integration)
-// Blueprint Reference: Part 5 — "Modules → Event Bus → Subscribers"
-// ─────────────────────────────────────────────────────────────────────────────
-
-export interface EventBusEnv {
-  EVENT_BUS_URL?: string | undefined;
-  EVENT_BUS_API_KEY?: string | undefined;
-}
-
-export async function publishEvent<T = Record<string, unknown>>(
-  event: WebWakaEvent<T>,
-  env: EventBusEnv
+/**
+ * Publish an event to the Cloudflare Queue.
+ * Falls back to in-memory eventBus in dev/test when queue is not bound.
+ */
+export async function publishEvent(
+  queue: EventQueue | null | undefined,
+  event: WebWakaEvent,
 ): Promise<void> {
-  // Always publish to local bus (for in-process subscribers and testing)
-  await localEventBus.publish(event);
-
-  // Publish to remote CORE-2 event bus if configured
-  if (!env.EVENT_BUS_URL) {
-    logger.warn('EVENT_BUS_URL not configured — event published locally only', {
-      event: event.event,
-      tenantId: event.tenantId
-    });
-    return;
-  }
-
-  try {
-    const response = await fetch(env.EVENT_BUS_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Tenant-ID': event.tenantId,
-        ...(env.EVENT_BUS_API_KEY ? { Authorization: `Bearer ${env.EVENT_BUS_API_KEY}` } : {})
-      },
-      body: JSON.stringify(event)
-    });
-
-    if (!response.ok) {
-      logger.error('Failed to publish event to CORE-2 event bus', {
-        event: event.event,
-        tenantId: event.tenantId,
-        status: String(response.status)
-      });
-    } else {
-      logger.info('Event published to CORE-2 event bus', {
-        event: event.event,
-        tenantId: event.tenantId,
-      });
-    }
-  } catch (error) {
-    logger.error('Network error publishing event to CORE-2 event bus', {
-      event: event.event,
-      tenantId: event.tenantId,
-      error: error instanceof Error ? error.message : 'Unknown error'
-    });
+  if (queue) {
+    await queue.send(event);
+  } else {
+    logger.warn('PROFESSIONAL_EVENTS queue not bound — falling back to in-memory bus', { type: event.type });
+    await eventBus.publish(event);
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// EVENT FACTORY HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── CF Queues Consumer Dispatcher ───────────────────────────────────────────
+
+export type EventHandler = (event: WebWakaEvent) => Promise<void>;
+const consumerHandlers = new Map<string, EventHandler[]>();
+
+export function registerHandler(eventType: string, handler: EventHandler): void {
+  if (!consumerHandlers.has(eventType)) consumerHandlers.set(eventType, []);
+  consumerHandlers.get(eventType)!.push(handler);
+}
+
+export function clearHandlers(): void {
+  consumerHandlers.clear();
+}
+
+export async function dispatchEvent(event: WebWakaEvent): Promise<void> {
+  const handlers = consumerHandlers.get(event.type) ?? [];
+  await Promise.allSettled(handlers.map(h => h(event)));
+}
+
+// ─── In-Memory Bus (dev / tests) ─────────────────────────────────────────────
+
+export class EventBusRegistry {
+  private handlers: Map<string, EventHandler[]> = new Map();
+  subscribe(eventType: string, handler: EventHandler): void {
+    if (!this.handlers.has(eventType)) this.handlers.set(eventType, []);
+    this.handlers.get(eventType)!.push(handler);
+  }
+  async publish(event: WebWakaEvent): Promise<void> {
+    const handlers = this.handlers.get(event.type) ?? [];
+    await Promise.allSettled(handlers.map(h => h(event)));
+  }
+}
+
+export const eventBus = new EventBusRegistry();
+
+// ─── Event factory helpers ────────────────────────────────────────────────────
 
 function generateEventId(): string {
   return `evt_pro_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
@@ -169,26 +122,34 @@ function generateEventId(): string {
 
 export function createEvent<T = Record<string, unknown>>(
   tenantId: string,
-  type: LegalEventType,
-  payload: T
-): WebWakaEvent<T & { id: string; sourceModule: PlatformSourceModule }> {
+  type: PlatformEventType,
+  sourceModule: PlatformSourceModule,
+  payload: T,
+): WebWakaEvent<T> {
   return {
-    event: type,
+    id: generateEventId(),
     tenantId,
-    payload: { ...payload, id: generateEventId(), sourceModule: 'legal_practice' as PlatformSourceModule },
+    type,
+    sourceModule,
     timestamp: Date.now(),
+    payload,
   };
 }
 
+/** @deprecated Use createEvent() instead. Legacy compatibility shim. */
+export function createLegalEvent<T = Record<string, unknown>>(
+  tenantId: string,
+  type: LegalEventType,
+  payload: T,
+): WebWakaEvent<T> {
+  return createEvent(tenantId, type, 'legal_practice', payload);
+}
+
+/** @deprecated Use createEvent() instead. */
 export function createEventMgmtEvent<T = Record<string, unknown>>(
   tenantId: string,
   type: EventMgmtEventType,
-  payload: T
-): WebWakaEvent<T & { id: string; sourceModule: PlatformSourceModule }> {
-  return {
-    event: type,
-    tenantId,
-    payload: { ...payload, id: generateEventId(), sourceModule: 'event_management' as PlatformSourceModule },
-    timestamp: Date.now(),
-  };
+  payload: T,
+): WebWakaEvent<T> {
+  return createEvent(tenantId, type, 'event_management', payload);
 }
