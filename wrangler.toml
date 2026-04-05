@@ -48,3 +48,12 @@ database_id = "REPLACE_WITH_PROFESSIONAL_DB_ID"
 [[env.production.r2_buckets]]
 binding = "DOCUMENTS"
 bucket_name = "webwaka-professional-docs-prod"
+
+[[env.production.queues.producers]]
+binding = "PROFESSIONAL_EVENTS"
+queue = "webwaka-professional-events-prod"
+
+[[env.production.queues.consumers]]
+queue = "webwaka-professional-events-prod"
+max_batch_size = 10
+max_batch_timeout = 5
