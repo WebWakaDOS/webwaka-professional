@@ -1,20 +1,19 @@
 /**
- * WebWaka AI Platform Client
+ * WebWaka AI Platform Client — Professional
  * Blueprint Reference: Part 10.8 — AI Contract Analysis
  *
- * Calls an OpenAI-compatible AI endpoint for document analysis and summarization.
- * The endpoint and API key are injected via environment variables:
- *   AI_API_URL       — base URL (e.g., https://api.openai.com/v1)
- *   AI_API_KEY       — API key
- *   AI_MODEL         — model name (e.g., gpt-4o-mini)
+ * All AI calls MUST go through webwaka-ai-platform (vendor-neutral gateway).
+ * The AI_PLATFORM_URL env var points at the deployed AI platform worker.
+ * AI_PLATFORM_TOKEN is a service-to-service bearer token.
  *
- * Falls back gracefully if AI is not configured (returns null).
+ * Falls back gracefully if the AI platform is not configured (returns null).
+ *
+ * DO NOT call raw OpenAI/OpenRouter/CF AI endpoints from verticals — use this client.
  */
 
-export interface AIEnv {
-  AI_API_URL?: string;
-  AI_API_KEY?: string;
-  AI_MODEL?: string;
+export interface AIPlatformEnv {
+  AI_PLATFORM_URL?: string;   // e.g. https://webwaka-ai-platform.workers.dev
+  AI_PLATFORM_TOKEN?: string; // service bearer token
 }
 
 export interface ContractAnalysisResult {
@@ -24,21 +23,58 @@ export interface ContractAnalysisResult {
   recommendations: string[];
 }
 
-const DEFAULT_MODEL = 'gpt-4o-mini';
+function isAIPlatformConfigured(env: AIPlatformEnv): boolean {
+  return !!(env.AI_PLATFORM_URL && env.AI_PLATFORM_TOKEN);
+}
 
-function isAIConfigured(env: AIEnv): boolean {
-  return !!(env.AI_API_URL && env.AI_API_KEY);
+async function callAIPlatform(
+  env: AIPlatformEnv,
+  messages: Array<{ role: string; content: string }>,
+  options: { maxTokens?: number; temperature?: number; jsonMode?: boolean } = {}
+): Promise<string | null> {
+  if (!isAIPlatformConfigured(env)) return null;
+
+  try {
+    const body: Record<string, unknown> = {
+      messages,
+      max_tokens: options.maxTokens ?? 1500,
+      temperature: options.temperature ?? 0.3,
+    };
+    if (options.jsonMode) {
+      body.response_format = { type: "json_object" };
+    }
+
+    const response = await fetch(`${env.AI_PLATFORM_URL}/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${env.AI_PLATFORM_TOKEN}`,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (!response.ok) {
+      console.error(`[ai-platform-client] AI platform returned ${response.status}`);
+      return null;
+    }
+
+    const data = await response.json() as {
+      choices: Array<{ message: { content: string } }>;
+    };
+    return data.choices[0]?.message?.content ?? null;
+  } catch (err) {
+    console.error("[ai-platform-client] request failed:", String(err));
+    return null;
+  }
 }
 
 export async function analyzeContract(
-  env: AIEnv,
+  env: AIPlatformEnv,
   documentText: string,
   documentTitle: string
 ): Promise<ContractAnalysisResult | null> {
-  if (!isAIConfigured(env)) return null;
-
-  const model = env.AI_MODEL ?? DEFAULT_MODEL;
-  const systemPrompt = `You are an expert Nigerian legal document analyst. 
+  const systemPrompt = `You are an expert Nigerian legal document analyst.
 Analyze legal contracts and documents with a focus on Nigerian law, NBA regulations, and local business practices.
 Always respond in valid JSON format with the following structure:
 {
@@ -58,39 +94,24 @@ Provide your analysis in the JSON format specified. Focus on:
 3. Key obligations, deadlines, and terms
 4. Specific recommendations for negotiation or protection`;
 
+  const content = await callAIPlatform(
+    env,
+    [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    { maxTokens: 2000, temperature: 0.3, jsonMode: true }
+  );
+
+  if (!content) return null;
+
   try {
-    const response = await fetch(`${env.AI_API_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${env.AI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 0.3,
-        max_tokens: 2000,
-        response_format: { type: 'json_object' }
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`AI API returned ${response.status}`);
-    }
-
-    const data = await response.json() as {
-      choices: Array<{ message: { content: string } }>;
-    };
-    const content = data.choices[0]?.message?.content ?? '{}';
     const parsed = JSON.parse(content) as ContractAnalysisResult;
     return {
-      summary: parsed.summary ?? '',
+      summary: parsed.summary ?? "",
       riskyClauses: Array.isArray(parsed.riskyClauses) ? parsed.riskyClauses : [],
       keyTerms: Array.isArray(parsed.keyTerms) ? parsed.keyTerms : [],
-      recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : []
+      recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : [],
     };
   } catch {
     return null;
@@ -98,34 +119,14 @@ Provide your analysis in the JSON format specified. Focus on:
 }
 
 export async function getAICompletion(
-  env: AIEnv,
+  env: AIPlatformEnv,
   prompt: string,
   systemInstruction?: string
 ): Promise<string | null> {
-  if (!isAIConfigured(env)) return null;
-
-  const model = env.AI_MODEL ?? DEFAULT_MODEL;
   const messages: Array<{ role: string; content: string }> = [];
-  if (systemInstruction) {
-    messages.push({ role: 'system', content: systemInstruction });
-  }
-  messages.push({ role: 'user', content: prompt });
-
-  try {
-    const response = await fetch(`${env.AI_API_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${env.AI_API_KEY}`
-      },
-      body: JSON.stringify({ model, messages, temperature: 0.5, max_tokens: 1500 })
-    });
-    if (!response.ok) return null;
-    const data = await response.json() as { choices: Array<{ message: { content: string } }> };
-    return data.choices[0]?.message?.content ?? null;
-  } catch {
-    return null;
-  }
+  if (systemInstruction) messages.push({ role: "system", content: systemInstruction });
+  messages.push({ role: "user", content: prompt });
+  return callAIPlatform(env, messages, { maxTokens: 1500, temperature: 0.5 });
 }
 
 export function assembleDocumentFromTemplate(
@@ -134,7 +135,8 @@ export function assembleDocumentFromTemplate(
 ): string {
   let result = templateContent;
   for (const [key, value] of Object.entries(variables)) {
-    result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value);
+    result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), value);
   }
   return result;
 }
+
